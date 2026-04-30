@@ -1,0 +1,61 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# ============================================================
+# Backend - dados e bases de dados
+# ============================================================
+backend/data/*.csv
+backend/chroma_db/
+backend/*.backup
+backend/*.backup-*
+
+# ============================================================
+# Logs e PIDs
+# ============================================================
+logs/
+*.log
+*.pid
+
+# ============================================================
+# LibreChat - dados runtime e segredos
+# ============================================================
+LibreChat/.env
+LibreChat/data-node/
+LibreChat/meili_data_*/
+LibreChat/images/
+LibreChat/uploads/
+LibreChat/logs/
+LibreChat/client/dist/
+
+# Manter apenas os ficheiros de configuração que customizámos
+# (librechat.yaml e docker-compose.override.yml SÃO versionados)
+
+# ============================================================
+# Editor / OS
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Outros
+# ============================================================
+node_modules/
+.env.local
+.env.*.local
