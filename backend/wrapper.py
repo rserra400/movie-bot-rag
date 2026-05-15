@@ -6,9 +6,11 @@ Suporta histórico de conversa para perguntas de followup.
 
 import json
 import os
+import re
 import time
 import uuid
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,88 +58,236 @@ class DiscoverRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Lógica de decisão de ferramentas (com histórico)
+# Classificador rápido de ferramentas (sem LLM)
 # ---------------------------------------------------------------------------
-ROUTER_PROMPT = """Decide a ferramenta para responder sobre filmes. Responde APENAS com JSON: {"tool": "...", "argument": "..."}
+_FRANCHISE_MAP = {
+    "velocidade furiosa": "Fast and Furious",
+    "velozes e furiosos": "Fast and Furious",
+    "fast and furious": "Fast and Furious",
+    "harry potter": "Harry Potter",
+    "senhor dos anéis": "The Lord of the Rings",
+    "senhor dos aneis": "The Lord of the Rings",
+    "o senhor dos anéis": "The Lord of the Rings",
+    "vingadores": "Avengers",
+    "avengers": "Avengers",
+    "star wars": "Star Wars",
+    "guerra das estrelas": "Star Wars",
+    "batman": "Batman",
+    "superman": "Superman",
+    "homem aranha": "Spider-Man",
+    "homem-aranha": "Spider-Man",
+    "spider-man": "Spider-Man",
+    "spider man": "Spider-Man",
+    "missão impossível": "Mission: Impossible",
+    "missao impossivel": "Mission: Impossible",
+    "jurassic park": "Jurassic Park",
+    "jurassic world": "Jurassic World",
+    "toy story": "Toy Story",
+    "piratas das caraíbas": "Pirates of the Caribbean",
+    "piratas das caribeias": "Pirates of the Caribbean",
+    "piratas das caraibas": "Pirates of the Caribbean",
+    "james bond": "James Bond",
+    "007": "James Bond",
+    "matrix": "The Matrix",
+    "alien": "Alien",
+    "predator": "Predator",
+    "homem de ferro": "Iron Man",
+    "iron man": "Iron Man",
+    "thor": "Thor",
+    "capitão america": "Captain America",
+    "capitao america": "Captain America",
+    "john wick": "John Wick",
+    "mad max": "Mad Max",
+    "transformers": "Transformers",
+    "x-men": "X-Men",
+    "x men": "X-Men",
+    "deadpool": "Deadpool",
+    "rocky": "Rocky",
+    "rambo": "Rambo",
+    "terminator": "The Terminator",
+    "exterminador implacável": "The Terminator",
+    "planeta dos macacos": "Planet of the Apes",
+}
 
-Ferramentas:
-- search: pesquisa semântica (recomendações, descrições, temas, combinações ator+tema)
-- by_actor: filmes de um ator — argumento deve ser APENAS o nome do ator, nada mais
-- by_director: filmes de um realizador — argumento deve ser APENAS o nome do realizador
-- by_title: informação sobre um filme específico
-- filter_combined: múltiplos filtros em JSON {"director","actor","genre","year_from","year_to"}
-- franchise: TODOS os filmes de uma saga/franquia — argumento é o nome da saga em inglês
-- more_like: filmes parecidos com um já mencionado no histórico
-- followup: APENAS quando referencia EXPLICITAMENTE filmes já mencionados ("esse", "aquele", "o primeiro", "dos que recomendaste")
-- none: não é sobre filmes
+_GENRE_THEME_WORDS = {
+    "ação", "acção", "aventura", "terror", "horror", "comédia", "comedia",
+    "drama", "thriller", "ficção científica", "ficcao cientifica", "sci-fi",
+    "romance", "crime", "mistério", "misterio", "animação", "animacao",
+    "fantasia", "suspense", "musical", "guerra", "western", "documentário",
+    "documentario", "drogas", "heist", "espionagem", "espaço", "espaco",
+    "zumbis", "vampiro", "psicológico", "psicologico", "violência", "violencia",
+}
 
-REGRAS CRÍTICAS:
-1. Se a pergunta combina ator/realizador com tema, género ou característica (ex: "Tom Cruise com drogas", "Spielberg de terror") → usa SEMPRE "search" com ator+tema juntos.
-2. by_actor e by_director: argumento é APENAS o nome da pessoa, nunca inclui tema, género ou descrição.
-3. Se a pergunta introduz NOVO tema — mesmo com histórico — usa "search" ou outro. "followup" só para filmes específicos já citados.
-4. QUERY EXPANSION — Se o utilizador referencia um jogo, livro, série, música ou outro conteúdo NÃO cinematográfico, converte o argumento para o tema/género cinematográfico equivalente. Nunca uses o nome do jogo/livro como argumento de pesquisa.
+_GENRE_EN_MAP = {
+    "ação": "Action", "acção": "Action",
+    "aventura": "Adventure",
+    "terror": "Horror", "horror": "Horror",
+    "comédia": "Comedy", "comedia": "Comedy",
+    "drama": "Drama",
+    "thriller": "Thriller",
+    "ficção científica": "Science Fiction", "ficcao cientifica": "Science Fiction",
+    "sci-fi": "Science Fiction",
+    "romance": "Romance",
+    "crime": "Crime",
+    "mistério": "Mystery", "misterio": "Mystery",
+    "animação": "Animation", "animacao": "Animation",
+    "fantasia": "Fantasy",
+    "musical": "Music",
+    "guerra": "War",
+    "western": "Western",
+    "documentário": "Documentary", "documentario": "Documentary",
+}
 
-Géneros em inglês: Action, Comedy, Drama, Horror, Thriller, Science Fiction, Animation, Fantasy, Crime, Adventure, Romance, Mystery.
+_MOVIE_KEYWORDS = [
+    "filme", "filmes", "cinema", "movie", "ator", "atriz", "realizador",
+    "diretor", "personagem", "saga", "franquia", "série", "serie",
+    "oscar", "prémio", "estreia", "recomend", "assisti", "assistir",
+    "género", "genero", "curta", "longa", "animaç", "documentário",
+    "ver um", "ver uns", "sugere", "sugerir", "conheces algum",
+]
 
-Exemplos:
-"Recomenda filmes de aventura" → {"tool":"search","argument":"adventure films"}
-"Quero filmes sobre drogas" → {"tool":"search","argument":"films about drugs addiction narcotics"}
-"Filmes do Tom Cruise" → {"tool":"by_actor","argument":"Tom Cruise"}
-"Tom Cruise com drogas" → {"tool":"search","argument":"Tom Cruise drug film"}
-"Filmes do Nolan" → {"tool":"by_director","argument":"Christopher Nolan"}
-"Spielberg filmes de terror" → {"tool":"search","argument":"Spielberg horror film"}
-"Filmes de terror dos anos 80" → {"tool":"filter_combined","argument":"{\\"genre\\":\\"Horror\\",\\"year_from\\":1980,\\"year_to\\":1989}"}
-"Mais parecidos com o Inception" → {"tool":"more_like","argument":"Inception"}
-"Qual o mais popular dos que recomendaste?" → {"tool":"followup","argument":""}
-"Filmes tipo Forza Horizon" → {"tool":"search","argument":"car racing driving speed automotive action films"}
-"Filmes como Need for Speed" → {"tool":"search","argument":"street racing illegal car chase action films"}
-"Filmes parecidos com GTA" → {"tool":"search","argument":"crime gangster heist urban open world action films"}
-"Filmes tipo Minecraft" → {"tool":"search","argument":"adventure survival fantasy exploration films"}
-"Filmes tipo Harry Potter livro" → {"tool":"search","argument":"magic wizard school fantasy adventure films"}
-"Todos os filmes do Velocidade Furiosa" → {"tool":"franchise","argument":"Fast and Furious"}
-"Saga completa do Star Wars" → {"tool":"franchise","argument":"Star Wars"}
-"Todos os filmes do Harry Potter" → {"tool":"franchise","argument":"Harry Potter"}
-"Filmes todos da saga Marvel Vingadores" → {"tool":"franchise","argument":"Avengers"}
 
-CONTEXTO ATUAL:
-"""
+def _has_genre_theme(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in _GENRE_THEME_WORDS)
+
+
+def _resolve_franchise(raw: str) -> str:
+    key = raw.lower().strip()
+    if key in _FRANCHISE_MAP:
+        return _FRANCHISE_MAP[key]
+    for pt, en in _FRANCHISE_MAP.items():
+        if pt in key:
+            return en
+    return raw.title()
+
+
+def _extract_year_filters(text: str) -> dict:
+    # "de 1990 a 2000" / "entre 1990 e 2000"
+    m = re.search(r"(?:de|entre)\s+(\d{4})\s+(?:a|e|até|ate)\s+(\d{4})", text)
+    if m:
+        return {"year_from": int(m.group(1)), "year_to": int(m.group(2))}
+    # "anos 80" / "nos anos 90s"
+    m = re.search(r"anos?\s+(\d{2,4})s?", text)
+    if m:
+        d = int(m.group(1))
+        if d < 100:
+            d = (2000 if d < 30 else 1900) + d
+        return {"year_from": d, "year_to": d + 9}
+    # "após 1990" / "depois de 1990"
+    filters = {}
+    m = re.search(r"(?:após|depois\s+de|desde)\s+(\d{4})", text)
+    if m:
+        filters["year_from"] = int(m.group(1))
+    m = re.search(r"(?:antes\s+de|até|ate)\s+(\d{4})", text)
+    if m:
+        filters["year_to"] = int(m.group(1))
+    return filters
+
+
+def _extract_genre_en(text: str) -> Optional[str]:
+    t = text.lower()
+    for pt, en in _GENRE_EN_MAP.items():
+        if pt in t:
+            return en
+    return None
 
 
 def classify_query(messages: list[dict]) -> dict:
-    """Pede à Llama para decidir que ferramenta usar, considerando o histórico."""
-    history_lines = []
-    for m in messages[:-1]:
-        role = m["role"]
-        content = m["content"]
-        if role == "assistant" and len(content) > 300:
-            content = content[:300] + "..."
-        history_lines.append(f"{role.capitalize()}: {content}")
+    """Classificador de regras sem LLM. Elimina uma chamada LLM por pedido."""
+    last = messages[-1]["content"]
+    t = last.lower().strip()
+    has_history = sum(1 for m in messages if m["role"] in ("user", "assistant")) > 1
 
-    history = "\n".join(history_lines) if history_lines else "(conversa nova, sem histórico)"
-    last_question = messages[-1]["content"]
+    # 1. FRANCHISE
+    for pat in [
+        r"todos\s+os\s+filmes\s+d[aeo]s?\s+(.+?)[\?!]*$",
+        r"filmes?\s+todos\s+d[aeo]s?\s+(?:saga\s+)?(.+?)[\?!]*$",
+        r"saga\s+(?:completa\s+)?(?:d[aeo]s?\s+)?(.+?)[\?!]*$",
+        r"franquia\s+(?:d[aeo]s?\s+)?(.+?)[\?!]*$",
+        r"coleção\s+completa\s+(?:d[aeo]s?\s+)?(.+?)[\?!]*$",
+        r"série\s+completa\s+de\s+filmes\s+(?:d[aeo]s?\s+)?(.+?)[\?!]*$",
+    ]:
+        m = re.search(pat, t)
+        if m:
+            return {"tool": "franchise", "argument": _resolve_franchise(m.group(1).strip())}
 
-    full_prompt = ROUTER_PROMPT + f"""
-Histórico:
-{history}
+    # 2. FOLLOWUP (só com histórico)
+    _followup_markers = [
+        "esse filme", "aquele filme", "esses filmes", "aqueles filmes",
+        "o primeiro", "o segundo", "o terceiro", "o último",
+        "dos que recomendaste", "dos que mencionaste", "dos que disseste",
+        "entre eles", "entre esses", "entre aqueles",
+        "qual deles", "desses", "daqueles", "que referiste", "que mencionaste",
+        "o mais popular dos", "o mais recente dos", "o mais antigo dos",
+        "o pior dos", "o melhor dos",
+    ]
+    if has_history and any(mk in t for mk in _followup_markers):
+        return {"tool": "followup", "argument": ""}
 
-Pergunta atual: {last_question}
-Resposta:"""
+    # 3. MORE_LIKE
+    for pat in [
+        r"(?:filmes?\s+)?(?:mais\s+)?parecid[ao]s?\s+com\s+(?:[ao]\s+)?(.+?)[\?!]*$",
+        r"(?:filmes?\s+)?similar(?:es)?\s+ao?\s+(?:[ao]\s+)?(.+?)[\?!]*$",
+        r"mais\s+filmes?\s+(?:como|tipo)\s+(?:[ao]\s+)?(.+?)[\?!]*$",
+        r"outros?\s+(?:filmes?\s+)?(?:como|tipo)\s+(?:o\s+)?(.+?)[\?!]*$",
+        r"à\s+semelhança\s+de\s+(.+?)[\?!]*$",
+    ]:
+        m = re.search(pat, t)
+        if m:
+            return {"tool": "more_like", "argument": m.group(1).strip().title()}
 
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [{"role": "user", "content": full_prompt}],
-        "stream": False,
-        "temperature": 0.0,
-        "max_tokens": 80,
-        "response_format": {"type": "json_object"},
-    }
-    r = requests.post(LLAMA_CHAT_URL, json=payload, timeout=90)
-    r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"]
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
+    # 4. BY_TITLE
+    for pat in [
+        r"(?:fala[- ]me|conta[- ]me)\s+(?:mais\s+)?(?:sobre|acerca\s+de)\s+(?:o\s+filme\s+)?(.+?)[\?!]*$",
+        r"sinopse\s+d[aeo]\s+(.+?)[\?!]*$",
+        r"de\s+que\s+(?:trata|é)\s+(?:o\s+filme\s+)?(.+?)[\?!]*$",
+    ]:
+        m = re.search(pat, t)
+        if m:
+            return {"tool": "by_title", "argument": m.group(1).strip().title()}
+
+    # 5. FILTER_COMBINED (tem filtro de ano)
+    year_f = _extract_year_filters(t)
+    if year_f:
+        filters: dict = {}
+        genre_f = _extract_genre_en(t)
+        if genre_f:
+            filters["genre"] = genre_f
+        filters.update(year_f)
+        return {"tool": "filter_combined", "argument": json.dumps(filters)}
+
+    # 6. BY_DIRECTOR (apenas com palavra-chave explícita)
+    for pat in [
+        r"filmes?\s+d[ao]\s+realizador\s+(.+?)[\?!]*$",
+        r"filmes?\s+da\s+realizadora\s+(.+?)[\?!]*$",
+        r"d[ao]\s+realizador\s+(.+?)[\?!]*$",
+        r"d[ao]\s+diretor\s+(.+?)[\?!]*$",
+        r"da\s+diretora\s+(.+?)[\?!]*$",
+    ]:
+        m = re.search(pat, t)
+        if m:
+            return {"tool": "by_director", "argument": m.group(1).strip().title()}
+
+    # 7. BY_ACTOR ("filmes do/da/com X" sem género/tema)
+    for pat in [
+        r"filmes?\s+d[ao]\s+(.+?)[\?!]*$",
+        r"filmes?\s+da\s+(.+?)[\?!]*$",
+        r"filmes?\s+com\s+(?:[ao]\s+)?(.+?)[\?!]*$",
+        r"filmografia\s+d[aeo]\s+(.+?)[\?!]*$",
+    ]:
+        m = re.search(pat, t)
+        if m:
+            raw = m.group(1).strip()
+            if 1 <= len(raw.split()) <= 4 and not _has_genre_theme(raw):
+                return {"tool": "by_actor", "argument": raw.title()}
+
+    # 8. NONE (claramente fora do tema filmes)
+    if not any(kw in t for kw in _MOVIE_KEYWORDS) and not has_history:
         return {"tool": "none", "argument": ""}
+
+    # 9. SEARCH (default)
+    return {"tool": "search", "argument": last.strip()}
 
 
 def find_movie_and_search_similar(title: str) -> Optional[dict]:
@@ -398,7 +548,7 @@ def call_llama(messages: list[dict]) -> str:
         "messages": messages,
         "stream": False,
         "temperature": 0.7,
-        "max_tokens": 450,
+        "max_tokens": 300,
     }
     r = requests.post(LLAMA_CHAT_URL, json=payload, timeout=120)
     r.raise_for_status()
@@ -416,10 +566,9 @@ def popular_movies():
         r = requests.get(f"{MOVIE_API}/movies/popular?limit=12", timeout=30)
         r.raise_for_status()
         results = r.json().get("results", [])
-        enriched = []
-        for movie in results:
+        def _enrich(movie):
             tmdb = get_tmdb_data(movie.get("title"), movie.get("year"))
-            enriched.append({
+            return {
                 "title": movie.get("title"),
                 "year": movie.get("year"),
                 "director": movie.get("director"),
@@ -429,7 +578,10 @@ def popular_movies():
                 "tmdb_rating": tmdb.get("tmdb_rating") if tmdb else None,
                 "tmdb_id": tmdb.get("tmdb_id") if tmdb else None,
                 "overview": tmdb.get("overview") if tmdb else None,
-            })
+            }
+
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            enriched = list(ex.map(_enrich, results))
         return {"results": enriched}
     except Exception as e:
         print(f"⚠️  Erro em /movies/popular: {e}")
@@ -655,6 +807,13 @@ RESPOSTA:"""
 
     elif tool != "none" and argument:
         api_data = call_movie_api(tool, argument)
+        # Fallback: by_actor sem resultados → tenta by_director (ex: "filmes do Nolan")
+        if tool == "by_actor" and (not api_data or not api_data.get("results")):
+            dir_data = call_movie_api("by_director", argument)
+            if dir_data and dir_data.get("results"):
+                api_data = dir_data
+                tool = "by_director"
+                print(f"🔄 Fallback by_actor→by_director para '{argument}'")
         if api_data:
             results = api_data.get("results", [])
             if not results:
@@ -684,13 +843,16 @@ RESPOSTA:"""
     if direct_tmdb_movies is not None:
         tmdb_movies = direct_tmdb_movies
     else:
-        tmdb_movies = []
-        for movie in context_movies:
+        def _fetch_tmdb(movie):
             data = get_tmdb_data(movie.get("title"), movie.get("year"))
             if data:
                 data["director"] = movie.get("director")
                 data["genres"]   = movie.get("genres")
-                tmdb_movies.append(data)
+                return data
+            return None
+
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            tmdb_movies = [r for r in ex.map(_fetch_tmdb, context_movies) if r is not None]
     if tmdb_movies:
         print(f"🎬 TMDB: {len(tmdb_movies)} posters encontrados")
 

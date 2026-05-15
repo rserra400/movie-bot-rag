@@ -37,7 +37,7 @@ else
         --host 0.0.0.0 \
         --port 8080 \
         --n_ctx 2048 \
-        --n_threads 8 \
+        --n_threads 10 \
         --n_batch 512 \
         --chat_format llama-3 \
         > "$LOG_DIR/llama.log" 2>&1 &
