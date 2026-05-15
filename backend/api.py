@@ -4,44 +4,36 @@ Expõe endpoints de pesquisa semântica e filtros sobre o catálogo TMDB 5000.
 """
 
 from typing import Optional
-import requests
 import chromadb
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
 
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-OLLAMA_URL = "http://localhost:11434/api/embeddings"
-EMBED_MODEL = "nomic-embed-text"
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "movies"
 
 # ---------------------------------------------------------------------------
-# App + Chroma client (singleton)
+# App + Chroma client + embedding model (singletons)
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="Movie Bot API",
     description="API de pesquisa de filmes com RAG sobre o catálogo TMDB 5000",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 _chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
 _collection = _chroma_client.get_collection(COLLECTION_NAME)
+_embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 def get_embedding(text: str) -> list[float]:
-    """Pede um embedding ao Ollama."""
-    response = requests.post(
-        OLLAMA_URL,
-        json={"model": EMBED_MODEL, "prompt": text},
-        timeout=60,
-    )
-    response.raise_for_status()
-    return response.json()["embedding"]
+    return _embed_model.encode(text).tolist()
 
 
 def _format_results(raw: dict) -> list[dict]:
@@ -453,6 +445,16 @@ def by_franchise(name: str, limit: int = Query(20, ge=1, le=50)):
         "count": len(matches),
         "results": matches[:limit],
     }
+
+
+@app.get("/movies/popular")
+def popular_movies(limit: int = Query(20, ge=1, le=50)):
+    """Filmes mais populares do catálogo."""
+    all_data = _collection.get(include=["metadatas"])
+    movies = [{"id": mid, **meta}
+              for mid, meta in zip(all_data["ids"], all_data["metadatas"])]
+    movies.sort(key=lambda m: float(m.get("popularity") or 0), reverse=True)
+    return {"count": len(movies), "results": movies[:limit]}
 
 
 @app.get("/franchises")

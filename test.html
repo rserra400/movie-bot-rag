@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MovieBot</title>
+<style>
+  :root {
+    --bg:       #0a0a0f;
+    --surface:  #111827;
+    --surface2: #1f2937;
+    --accent:   #e94560;
+    --accent2:  #ff6b6b;
+    --gold:     #f5c518;
+    --text:     #f0f0f0;
+    --muted:    #6b7280;
+    --border:   #1f2937;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── NAVBAR ── */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 28px; height: 56px; flex-shrink: 0;
+    background: linear-gradient(90deg, #0a0a0f 0%, #120810 60%, #0a0a0f 100%);
+    border-bottom: 1px solid #1a0d14;
+  }
+  .logo {
+    font-size: 1.5rem; font-weight: 900; letter-spacing: 3px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 12px rgba(233,69,96,0.4));
+  }
+  .logo span { -webkit-text-fill-color: var(--text); }
+  .tagline { font-size: 0.72rem; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+
+  /* ── MAIN LAYOUT ── */
+  .main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+  /* ── CHAT PANEL ── */
+  .chat-panel {
+    width: 370px; flex-shrink: 0;
+    display: flex; flex-direction: column;
+    background: var(--surface); border-right: 1px solid var(--border);
+  }
+
+  /* ── TABS ── */
+  .tab-bar {
+    display: flex; align-items: stretch; flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    flex: 1; padding: 11px 0; border: none; cursor: pointer;
+    background: transparent; color: var(--muted);
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; transition: color .2s;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .clear-btn {
+    padding: 0 13px; background: none; border: none; border-left: 1px solid var(--border);
+    color: var(--muted); cursor: pointer; font-size: 1rem;
+    transition: color .2s; flex-shrink: 0;
+  }
+  .clear-btn:hover { color: var(--accent); }
+
+  /* ── CHAT MESSAGES ── */
+  #chat {
+    flex: 1; overflow-y: auto; padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .msg {
+    max-width: 90%; padding: 9px 13px; line-height: 1.6;
+    white-space: pre-wrap; font-size: 0.85rem;
+  }
+  .user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, var(--accent), #c0392b);
+    color: #fff; border-radius: 14px 14px 3px 14px;
+  }
+  .bot {
+    align-self: flex-start;
+    background: var(--surface2); color: var(--text);
+    border-radius: 14px 14px 14px 3px; border: 1px solid var(--border);
+  }
+  .typing {
+    align-self: flex-start;
+    background: var(--surface2); color: var(--muted);
+    font-style: italic; font-size: 0.78rem;
+    border-radius: 14px; padding: 8px 13px; border: 1px solid var(--border);
+  }
+  #form {
+    display: flex; padding: 12px; gap: 8px; flex-shrink: 0;
+    background: var(--surface); border-top: 1px solid var(--border);
+  }
+  #input {
+    flex: 1; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text);
+    font-size: 0.85rem; outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  #input::placeholder { color: var(--muted); }
+  #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(233,69,96,.15); }
+  #send-btn {
+    width: 40px; height: 40px; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, var(--accent), #c0392b);
+    color: #fff; font-size: 1rem; cursor: pointer;
+    transition: opacity .2s, transform .1s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #send-btn:hover { opacity: 0.85; }
+  #send-btn:active { transform: scale(0.94); }
+  #send-btn:disabled { opacity: 0.3; cursor: default; }
+
+  /* ── DISCOVER PANEL ── */
+  .qa-panel {
+    flex: 1; overflow-y: auto; padding: 16px 14px;
+    display: flex; flex-direction: column; gap: 20px;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .qa-label {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 1.5px;
+    color: var(--accent); text-transform: uppercase; margin-bottom: 8px;
+  }
+  .qa-opts { display: flex; flex-wrap: wrap; gap: 7px; }
+  .qa-opt {
+    padding: 6px 13px; border-radius: 20px;
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-size: 0.78rem; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+    user-select: none;
+  }
+  .qa-opt:hover { border-color: var(--accent); }
+  .qa-opt.sel   { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .qa-discover-btn {
+    padding: 11px; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, var(--accent), #c0392b);
+    color: #fff; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; letter-spacing: 0.5px; transition: opacity .2s; flex-shrink: 0;
+  }
+  .qa-discover-btn:hover    { opacity: 0.85; }
+  .qa-discover-btn:disabled { opacity: 0.35; cursor: default; }
+  .qa-result {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px;
+    font-size: 0.82rem; line-height: 1.6; color: var(--text); white-space: pre-wrap;
+  }
+  .qa-typing { color: var(--muted); font-style: italic; font-size: 0.78rem; }
+
+  /* ── MOVIES PANEL ── */
+  .movies-panel {
+    flex: 1; overflow-y: auto; padding: 20px 22px;
+    background: var(--bg);
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .section-title  { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.5px; }
+  .section-badge  {
+    font-size: 0.65rem; padding: 3px 9px; border-radius: 20px;
+    background: rgba(233,69,96,.18); color: var(--accent);
+    border: 1px solid rgba(233,69,96,.3); font-weight: 700; letter-spacing: .5px;
+  }
+
+  /* ── RAG PANEL ── */
+  .rag-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 16px;
+  }
+  .rag-label {
+    font-size: 0.62rem; font-weight: 700; color: var(--accent);
+    letter-spacing: 1.5px; text-transform: uppercase;
+    margin-bottom: 7px; display: flex; align-items: center; gap: 6px;
+  }
+  .rag-label::before {
+    content: ""; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+  }
+  .rag-item {
+    display: flex; align-items: baseline; gap: 5px;
+    padding: 3px 0; font-size: 0.72rem; color: var(--muted);
+    border-bottom: 1px solid rgba(255,255,255,.04);
+  }
+  .rag-item:last-child { border-bottom: none; }
+  .rag-item-num   { color: var(--accent); font-weight: 700; font-size: 0.65rem; flex-shrink: 0; }
+  .rag-item-title { color: var(--text); font-weight: 600; }
+
+  /* ── MOVIE GRID ── */
+  .movies-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+    gap: 14px;
+  }
+
+  /* ── MOVIE CARD ── */
+  .movie-card {
+    position: relative; border-radius: 10px; overflow: hidden;
+    aspect-ratio: 2/3; cursor: pointer; background: var(--surface2);
+    transition: transform .22s ease, box-shadow .22s ease;
+  }
+  .movie-card:hover {
+    transform: translateY(-6px) scale(1.03);
+    box-shadow: 0 16px 40px rgba(233,69,96,.25), 0 4px 12px rgba(0,0,0,.6);
+    z-index: 3;
+  }
+  .movie-card img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter .22s; }
+  .movie-card:hover img { filter: brightness(0.3); }
+  .card-overlay {
+    position: absolute; inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,.85) 40%, transparent 100%);
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 10px; transition: background .22s;
+  }
+  .movie-card:hover .card-overlay {
+    background: transparent;
+    justify-content: center; align-items: center; text-align: center; padding: 12px;
+  }
+  .card-title { font-size: 0.75rem; font-weight: 700; color: #fff; line-height: 1.3; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+  .card-year  { font-size: 0.65rem; color: rgba(255,255,255,.6); margin-top: 2px; }
+  .card-score { font-size: 0.7rem; color: var(--gold); margin-top: 3px; font-weight: 700; }
+  .card-dir   { font-size: 0.63rem; color: rgba(255,255,255,.55); margin-top: 4px; }
+  .no-poster {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; color: #333; font-size: 2.2rem;
+  }
+  .no-poster-label { font-size: 0.65rem; color: var(--muted); text-align: center; padding: 0 8px; }
+
+  /* ── SKELETON ── */
+  .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 14px; }
+  .skeleton {
+    aspect-ratio: 2/3; border-radius: 10px;
+    background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
+    background-size: 200% 100%; animation: shimmer 1.6s infinite ease-in-out;
+  }
+  @keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position:  200% 0; }
+  }
+
+  /* ── WATCHLIST BAR ── */
+  .watchlist-bar {
+    flex-shrink: 0; background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    transition: height .3s ease; height: 130px; overflow: hidden;
+  }
+  .watchlist-bar.collapsed { height: 40px; }
+  .watchlist-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 20px; height: 40px; flex-shrink: 0; cursor: pointer;
+    user-select: none;
+  }
+  .watchlist-header:hover .watchlist-title { color: var(--accent); }
+  .watchlist-title {
+    font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase; color: var(--text);
+    transition: color .2s;
+  }
+  .wl-count {
+    font-size: 0.65rem; padding: 2px 7px; border-radius: 10px;
+    background: rgba(233,69,96,.18); color: var(--accent);
+    border: 1px solid rgba(233,69,96,.3); font-weight: 700;
+  }
+  .wl-toggle { margin-left: auto; color: var(--muted); font-size: 0.75rem; transition: transform .3s; }
+  .watchlist-bar.collapsed .wl-toggle { transform: rotate(180deg); }
+  .watchlist-scroll {
+    flex: 1; overflow-x: auto; overflow-y: hidden;
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 20px 10px;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .wl-empty { color: var(--muted); font-size: 0.78rem; font-style: italic; white-space: nowrap; }
+  .wl-card {
+    flex-shrink: 0; width: 56px; position: relative; cursor: pointer;
+  }
+  .wl-card img {
+    width: 56px; height: 84px; object-fit: cover; border-radius: 6px;
+    display: block; transition: opacity .2s;
+    box-shadow: 0 4px 10px rgba(0,0,0,.5);
+  }
+  .wl-card:hover img { opacity: 0.65; }
+  .wl-noposter {
+    width: 56px; height: 84px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; color: #333;
+  }
+  .wl-remove {
+    position: absolute; top: -5px; right: -5px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); border: none; color: #fff;
+    font-size: 0.7rem; cursor: pointer;
+    display: none; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,.5);
+  }
+  .wl-card:hover .wl-remove { display: flex; }
+
+  /* save button on cards */
+  .card-save {
+    position: absolute; top: 7px; right: 7px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(0,0,0,.65); border: 1px solid rgba(255,255,255,.2);
+    color: #fff; font-size: 0.78rem; cursor: pointer;
+    display: none; align-items: center; justify-content: center;
+    transition: background .2s; z-index: 4;
+  }
+  .movie-card:hover .card-save { display: flex; }
+  .card-save:hover { background: var(--accent); border-color: var(--accent); }
+  .card-save.saved { background: var(--accent); border-color: var(--accent); display: flex; }
+
+  /* ── MODAL ── */
+  #modal-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,.82); backdrop-filter: blur(6px);
+    display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  #modal-overlay.open { display: flex; }
+  #modal-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; max-width: 560px; width: 100%; max-height: 88vh; overflow-y: auto;
+    position: relative; animation: fadeUp .2s ease;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .modal-close {
+    position: absolute; top: 12px; right: 14px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--muted); font-size: 0.85rem; cursor: pointer;
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transition: color .2s, background .2s; z-index: 1;
+  }
+  .modal-close:hover { color: var(--text); background: var(--border); }
+  #modal-inner { display: flex; gap: 20px; padding: 22px; }
+  #modal-poster-wrap { width: 130px; flex-shrink: 0; }
+  #modal-poster-wrap img { width: 100%; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .modal-no-poster {
+    width: 130px; height: 195px; border-radius: 8px;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 2.5rem; color: #333;
+  }
+  #modal-body  { flex: 1; min-width: 0; }
+  .modal-title { font-size: 1rem; font-weight: 800; margin-bottom: 8px; line-height: 1.3; }
+  .modal-meta  { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .modal-tag {
+    font-size: 0.68rem; padding: 2px 8px; border-radius: 10px;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .modal-tag.gold { color: var(--gold); border-color: rgba(245,197,24,.3); background: rgba(245,197,24,.08); }
+  .modal-overview {
+    font-size: 0.8rem; line-height: 1.65; color: rgba(240,240,240,.75);
+    margin-bottom: 16px; max-height: 130px; overflow-y: auto;
+  }
+  .modal-tmdb-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 8px;
+    background: rgba(233,69,96,.15); color: var(--accent);
+    border: 1px solid rgba(233,69,96,.3); font-size: 0.75rem; font-weight: 700;
+    text-decoration: none; transition: background .2s;
+  }
+  .modal-tmdb-btn:hover { background: rgba(233,69,96,.25); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">MOVIE<span>BOT</span></div>
+  <div class="tagline">Recomendações com IA · RAG</div>
+</nav>
+
+<div class="main">
+
+  <!-- CHAT + DISCOVER -->
+  <div class="chat-panel">
+
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-chat-btn" onclick="switchTab('chat')">💬 Chat</button>
+      <button class="tab-btn" id="tab-discover-btn" onclick="switchTab('discover')">🎯 Descobrir</button>
+      <button class="clear-btn" onclick="clearChat()" title="Limpar conversa">↺</button>
+    </div>
+
+    <!-- Chat -->
+    <div id="panel-chat" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+      <div id="chat"></div>
+      <form id="form">
+        <input id="input" placeholder="Pede uma recomendação de filme..." autocomplete="off">
+        <button type="submit" id="send-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+          </svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- Discover -->
+    <div id="panel-discover" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+      <div class="qa-panel">
+
+        <div>
+          <div class="qa-label">Que género preferes?</div>
+          <div class="qa-opts" id="qa-genre">
+            <button class="qa-opt" onclick="selectOpt('genre',this,'action adventure')">🎬 Ação</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'comedy funny')">😂 Comédia</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'drama emotional')">🎭 Drama</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'horror scary thriller')">😱 Terror</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'science fiction sci-fi')">🚀 Sci-Fi</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'romance love story')">💕 Romance</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'crime thriller mystery')">🔍 Crime</button>
+            <button class="qa-opt" onclick="selectOpt('genre',this,'animation animated family')">✨ Animação</button>
+          </div>
+        </div>
+
+        <div>
+          <div class="qa-label">Que humor estás hoje?</div>
+          <div class="qa-opts" id="qa-mood">
+            <button class="qa-opt" onclick="selectOpt('mood',this,'lighthearted fun entertaining')">😄 Leve e divertido</button>
+            <button class="qa-opt" onclick="selectOpt('mood',this,'intense thrilling exciting')">⚡ Intenso</button>
+            <button class="qa-opt" onclick="selectOpt('mood',this,'thought-provoking deep meaningful')">🧠 Para pensar</button>
+            <button class="qa-opt" onclick="selectOpt('mood',this,'')">🎲 Surpreende-me</button>
+          </div>
+        </div>
+
+        <div>
+          <div class="qa-label">De que época?</div>
+          <div class="qa-opts" id="qa-era">
+            <button class="qa-opt" onclick="selectOpt('era',this,'classic film before 1990')">📽️ Antes de 1990</button>
+            <button class="qa-opt" onclick="selectOpt('era',this,'film from 1990s 2000s')">💿 Anos 90-2000</button>
+            <button class="qa-opt" onclick="selectOpt('era',this,'modern film after 2010')">📱 2010 em diante</button>
+            <button class="qa-opt" onclick="selectOpt('era',this,'')">🎞️ Tanto faz</button>
+          </div>
+        </div>
+
+        <button class="qa-discover-btn" id="qa-btn" onclick="discoverMovie()" disabled>
+          Descobrir Filme →
+        </button>
+
+        <div id="qa-result" style="display:none"></div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- MOVIES -->
+  <div class="movies-panel">
+    <div class="section-header">
+      <span class="section-title" id="section-title">Em Destaque</span>
+      <span class="section-badge" id="section-badge">Popular</span>
+    </div>
+    <div id="rag-panel" class="rag-panel" style="display:none">
+      <div class="rag-label">Recuperado do ChromaDB</div>
+      <div id="rag-list"></div>
+    </div>
+    <div id="movies-grid" class="loading-grid"></div>
+  </div>
+
+</div>
+
+<!-- WATCHLIST -->
+<div class="watchlist-bar collapsed" id="watchlist-bar">
+  <div class="watchlist-header" onclick="toggleWatchlist()">
+    <span style="font-size:1rem">🔖</span>
+    <span class="watchlist-title">A Minha Lista</span>
+    <span class="wl-count" id="wl-count">0</span>
+    <span class="wl-toggle" id="wl-toggle">▲</span>
+  </div>
+  <div class="watchlist-scroll" id="watchlist-scroll">
+    <span class="wl-empty" id="wl-empty">Guarda filmes clicando em 🔖 nos posters.</span>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div id="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div id="modal-box">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div id="modal-inner">
+      <div id="modal-poster-wrap"></div>
+      <div id="modal-body">
+        <div class="modal-title" id="modal-title"></div>
+        <div class="modal-meta"  id="modal-meta"></div>
+        <div class="modal-overview" id="modal-overview"></div>
+        <a class="modal-tmdb-btn" id="modal-tmdb-link" href="" target="_blank" rel="noopener">
+          Ver no TMDB →
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const WRAPPER = "http://localhost:8001";
+const history = [];
+
+// ── Skeletons ──────────────────────────────────────────────────────────────
+function showSkeletons(n = 8) {
+  const g = document.getElementById("movies-grid");
+  g.className = "loading-grid";
+  g.innerHTML = Array(n).fill('<div class="skeleton"></div>').join("");
+  document.getElementById("rag-panel").style.display = "none";
+}
+
+// ── Typewriter effect ──────────────────────────────────────────────────────
+async function typeMessage(el, text, speed = 10) {
+  el.textContent = '';
+  for (let i = 0; i < text.length; i++) {
+    el.textContent += text[i];
+    if (i % 3 === 0) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      await new Promise(r => setTimeout(r, speed));
+    }
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── Render movie cards ─────────────────────────────────────────────────────
+function renderMovies(movies) {
+  const g = document.getElementById("movies-grid");
+  g.className = "movies-grid";
+  g.innerHTML = "";
+  if (!movies || !movies.length) {
+    g.innerHTML = '<p style="color:var(--muted);font-size:.85rem">Nenhum filme encontrado.</p>';
+    return;
+  }
+  movies.forEach(m => {
+    const card = document.createElement("div");
+    card.className = "movie-card";
+    const year   = m.year   ? String(m.year).slice(0, 4) : "";
+    const rating = m.tmdb_rating
+      ? `★ ${m.tmdb_rating}`
+      : m.vote_average ? `★ ${parseFloat(m.vote_average).toFixed(1)}` : "";
+    const dir = m.director || "";
+
+    if (m.poster_url) {
+      card.innerHTML = `
+        <img src="${m.poster_url}" alt="" loading="lazy">
+        <div class="card-overlay">
+          <div class="card-title">${m.title}</div>
+          <div class="card-year">${year}</div>
+          ${rating ? `<div class="card-score">${rating}</div>` : ""}
+          ${dir    ? `<div class="card-dir">${dir}</div>` : ""}
+        </div>`;
+    } else {
+      card.innerHTML = `
+        <div class="no-poster">🎬<div class="no-poster-label">${m.title}</div></div>
+        <div class="card-overlay">
+          <div class="card-title">${m.title}</div>
+          <div class="card-year">${year}</div>
+          ${rating ? `<div class="card-score">${rating}</div>` : ""}
+        </div>`;
+    }
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'card-save' + (isInWatchlist(m) ? ' saved' : '');
+    saveBtn.title = isInWatchlist(m) ? 'Remover da lista' : 'Guardar na lista';
+    saveBtn.textContent = '🔖';
+    saveBtn.dataset.title = m.title;
+    saveBtn.dataset.year  = m.year || '';
+    saveBtn.addEventListener('click', e => toggleSave(m, e));
+    card.appendChild(saveBtn);
+
+    card.addEventListener('click', () => openModal(m));
+    g.appendChild(card);
+  });
+}
+
+// ── RAG panel ─────────────────────────────────────────────────────────────
+function showRag(retrieved) {
+  const panel = document.getElementById('rag-panel');
+  const list  = document.getElementById('rag-list');
+  if (!retrieved || !retrieved.length) { panel.style.display = 'none'; return; }
+  list.innerHTML = '';
+  retrieved.forEach((m, i) => {
+    const div = document.createElement('div');
+    div.className = 'rag-item';
+    const gen = m.genres ? ` · ${m.genres}` : '';
+    div.innerHTML = `
+      <span class="rag-item-num">${i + 1}.</span>
+      <span class="rag-item-title">${m.title}</span>
+      <span>(${m.year || '—'})</span>
+      <span>${m.director ? '· ' + m.director : ''}${gen}</span>`;
+    list.appendChild(div);
+  });
+  panel.style.display = 'block';
+}
+
+// ── Movie modal ────────────────────────────────────────────────────────────
+function openModal(movie) {
+  const posterWrap = document.getElementById('modal-poster-wrap');
+  posterWrap.innerHTML = movie.poster_url
+    ? `<img src="${movie.poster_url}" alt="${movie.title}">`
+    : `<div class="modal-no-poster">🎬</div>`;
+
+  document.getElementById('modal-title').textContent = movie.title || '';
+
+  const meta = document.getElementById('modal-meta');
+  meta.innerHTML = '';
+  const year = movie.year ? String(movie.year).slice(0, 4) : '';
+  if (year)             meta.innerHTML += `<span class="modal-tag">${year}</span>`;
+  if (movie.tmdb_rating) meta.innerHTML += `<span class="modal-tag gold">★ ${movie.tmdb_rating}</span>`;
+  if (movie.director)   meta.innerHTML += `<span class="modal-tag">${movie.director}</span>`;
+  if (movie.genres)     meta.innerHTML += `<span class="modal-tag">${movie.genres}</span>`;
+
+  document.getElementById('modal-overview').textContent =
+    movie.overview || 'Sem sinopse disponível.';
+
+  const link = document.getElementById('modal-tmdb-link');
+  if (movie.tmdb_id) {
+    link.href = `https://www.themoviedb.org/movie/${movie.tmdb_id}`;
+    link.style.display = 'inline-flex';
+  } else {
+    link.style.display = 'none';
+  }
+
+  document.getElementById('modal-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// ── Load popular on start ──────────────────────────────────────────────────
+showSkeletons(12);
+fetch(`${WRAPPER}/movies/popular`)
+  .then(r => r.json())
+  .then(d => renderMovies(d.results))
+  .catch(() => {
+    document.getElementById("movies-grid").innerHTML =
+      '<p style="color:var(--muted);font-size:.85rem">Não foi possível carregar filmes.</p>';
+  });
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  document.getElementById("chat").appendChild(div);
+  div.scrollIntoView({ behavior: "smooth" });
+  return div;
+}
+
+function clearChat() {
+  history.length = 0;
+  document.getElementById('chat').innerHTML = '';
+  document.getElementById('rag-panel').style.display = 'none';
+  document.getElementById('section-title').textContent = 'Em Destaque';
+  document.getElementById('section-badge').textContent = 'Popular';
+  showSkeletons(12);
+  fetch(`${WRAPPER}/movies/popular`).then(r => r.json()).then(d => renderMovies(d.results));
+}
+
+document.getElementById("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("input");
+  const btn   = document.getElementById("send-btn");
+  const text  = input.value.trim();
+  if (!text) return;
+
+  input.value = "";
+  btn.disabled = true;
+  addMsg(text, "user");
+  history.push({ role: "user", content: text });
+
+  const typing = addMsg("A pensar...", "typing");
+  showSkeletons(6);
+
+  try {
+    const res  = await fetch(`${WRAPPER}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "movie-bot", messages: history, stream: false })
+    });
+    const data = await res.json();
+    const reply = data.choices[0].message.content;
+    history.push({ role: "assistant", content: reply });
+    typing.remove();
+
+    const botDiv = addMsg('', 'bot');
+    await typeMessage(botDiv, reply);
+
+    showRag(data.retrieved);
+
+    if (data.movies && data.movies.length > 0) {
+      document.getElementById("section-title").textContent = "Recomendações";
+      document.getElementById("section-badge").textContent = `${data.movies.length} filmes`;
+      renderMovies(data.movies);
+    } else {
+      document.getElementById("section-title").textContent = "Sem Resultados";
+      document.getElementById("section-badge").textContent = "0 filmes";
+      document.getElementById("movies-grid").className = "movies-grid";
+      document.getElementById("movies-grid").innerHTML =
+        '<p style="color:var(--muted);font-size:.85rem;padding:8px 0">Não foram encontrados filmes para esta pesquisa.</p>';
+    }
+  } catch (err) {
+    typing.remove();
+    addMsg("Erro: " + err.message, "bot");
+    document.getElementById("movies-grid").innerHTML = "";
+  }
+
+  btn.disabled = false;
+  input.focus();
+});
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(tab) {
+  const isChat = tab === 'chat';
+  document.getElementById('panel-chat').style.display     = isChat ? 'flex' : 'none';
+  document.getElementById('panel-discover').style.display = isChat ? 'none' : 'flex';
+  document.getElementById('tab-chat-btn').classList.toggle('active', isChat);
+  document.getElementById('tab-discover-btn').classList.toggle('active', !isChat);
+}
+
+// ── Q&A selection ──────────────────────────────────────────────────────────
+const qaSelections = { genre: null, mood: null, era: null };
+
+function selectOpt(group, el, value) {
+  document.querySelectorAll(`#qa-${group} .qa-opt`).forEach(b => b.classList.remove('sel'));
+  el.classList.add('sel');
+  qaSelections[group] = value;
+  const allPicked = qaSelections.genre !== null && qaSelections.mood !== null && qaSelections.era !== null;
+  document.getElementById('qa-btn').disabled = !allPicked;
+}
+
+// ── Discover mappings ──────────────────────────────────────────────────────
+const genreFilterMap = {
+  'action adventure':          'Action',
+  'comedy funny':              'Comedy',
+  'drama emotional':           'Drama',
+  'horror scary thriller':     'Horror',
+  'science fiction sci-fi':    'Science Fiction',
+  'romance love story':        'Romance',
+  'crime thriller mystery':    'Crime',
+  'animation animated family': 'Animation'
+};
+const genreLabelMap = {
+  'action adventure':          'ação e aventura',
+  'comedy funny':              'comédia',
+  'drama emotional':           'drama',
+  'horror scary thriller':     'terror',
+  'science fiction sci-fi':    'ficção científica',
+  'romance love story':        'romance',
+  'crime thriller mystery':    'crime e thriller',
+  'animation animated family': 'animação'
+};
+const moodLabelMap = {
+  'lighthearted fun entertaining':     'leve e divertido',
+  'intense thrilling exciting':        'intenso e emocionante',
+  'thought-provoking deep meaningful': 'que faça pensar',
+  '':                                  'interessante e variado'
+};
+const eraFilterMap = {
+  'classic film before 1990': { year_to: 1989 },
+  'film from 1990s 2000s':    { year_from: 1990, year_to: 2009 },
+  'modern film after 2010':   { year_from: 2010 },
+  '':                         {}
+};
+
+// ── Discover ───────────────────────────────────────────────────────────────
+async function discoverMovie() {
+  const body = {
+    genre_filter: genreFilterMap[qaSelections.genre] || null,
+    genre_label:  genreLabelMap[qaSelections.genre]  || null,
+    mood:         moodLabelMap[qaSelections.mood]    || null,
+    ...(eraFilterMap[qaSelections.era] || {})
+  };
+
+  const resultEl = document.getElementById('qa-result');
+  resultEl.style.display = 'block';
+  resultEl.className = 'qa-result qa-typing';
+  resultEl.textContent = 'A procurar...';
+  document.getElementById('qa-btn').disabled = true;
+  showSkeletons(6);
+
+  try {
+    const res = await fetch(`${WRAPPER}/v1/discover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    resultEl.className = 'qa-result';
+    resultEl.textContent = '';
+    await typeMessage(resultEl, data.text);
+
+    if (data.movies && data.movies.length > 0) {
+      document.getElementById('section-title').textContent = 'Para Ti';
+      document.getElementById('section-badge').textContent = `${data.movies.length} filmes`;
+      renderMovies(data.movies);
+    } else {
+      document.getElementById('section-title').textContent = 'Sem Resultados';
+      document.getElementById('section-badge').textContent = '0 filmes';
+      document.getElementById('movies-grid').className = 'movies-grid';
+      document.getElementById('movies-grid').innerHTML =
+        '<p style="color:var(--muted);font-size:.85rem;padding:8px 0">Não foram encontrados filmes para esta pesquisa.</p>';
+    }
+  } catch (err) {
+    resultEl.className = 'qa-result';
+    resultEl.textContent = 'Erro: ' + err.message;
+    document.getElementById('movies-grid').innerHTML = '';
+  }
+
+  document.getElementById('qa-btn').disabled = false;
+}
+
+// ── Watchlist ──────────────────────────────────────────────────────────────
+let watchlist = JSON.parse(localStorage.getItem('moviebot-watchlist') || '[]');
+
+function saveWL()         { localStorage.setItem('moviebot-watchlist', JSON.stringify(watchlist)); }
+function isInWatchlist(m) { return watchlist.some(w => w.title === m.title && w.year === m.year); }
+
+function toggleSave(movie, e) {
+  e.stopPropagation();
+  if (isInWatchlist(movie)) {
+    watchlist = watchlist.filter(w => !(w.title === movie.title && w.year === movie.year));
+  } else {
+    watchlist.push(movie);
+    if (document.getElementById('watchlist-bar').classList.contains('collapsed'))
+      toggleWatchlist();
+  }
+  saveWL();
+  renderWatchlistBar();
+  document.querySelectorAll('.card-save').forEach(btn => {
+    const inList = watchlist.some(w => w.title === btn.dataset.title && w.year === btn.dataset.year);
+    btn.classList.toggle('saved', inList);
+    btn.title = inList ? 'Remover da lista' : 'Guardar na lista';
+  });
+}
+
+function renderWatchlistBar() {
+  const scroll  = document.getElementById('watchlist-scroll');
+  const countEl = document.getElementById('wl-count');
+  countEl.textContent = watchlist.length;
+  scroll.innerHTML = '';
+  if (!watchlist.length) {
+    scroll.innerHTML = '<span class="wl-empty">Guarda filmes clicando em 🔖 nos posters.</span>';
+    return;
+  }
+  watchlist.forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'wl-card';
+    card.title = `${m.title}${m.year ? ' (' + String(m.year).slice(0,4) + ')' : ''}`;
+    card.innerHTML = m.poster_url
+      ? `<img src="${m.poster_url}" alt="${m.title}" loading="lazy">`
+      : `<div class="wl-noposter">🎬</div>`;
+    const rm = document.createElement('button');
+    rm.className = 'wl-remove'; rm.textContent = '×';
+    rm.onclick = e => { e.stopPropagation(); watchlist = watchlist.filter(w => !(w.title === m.title && w.year === m.year)); saveWL(); renderWatchlistBar(); };
+    card.appendChild(rm);
+    card.addEventListener('click', () => openModal(m));
+    scroll.appendChild(card);
+  });
+}
+
+function toggleWatchlist() {
+  document.getElementById('watchlist-bar').classList.toggle('collapsed');
+}
+
+renderWatchlistBar();
+</script>
+</body>
+</html>

@@ -8,17 +8,17 @@ Para cada filme:
 
 import json
 import pandas as pd
-import requests
 import chromadb
 from tqdm import tqdm
+from sentence_transformers import SentenceTransformer
 
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-OLLAMA_URL = "http://localhost:11434/api/embeddings"
-EMBED_MODEL = "nomic-embed-text"
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "movies"
+
+_embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,15 +32,8 @@ def safe_json_load(text):
         return []
 
 
-def get_embedding(text: str) -> list[float]:
-    """Pede um embedding ao Ollama."""
-    response = requests.post(
-        OLLAMA_URL,
-        json={"model": EMBED_MODEL, "prompt": text},
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()["embedding"]
+def get_embeddings(texts: list[str]) -> list[list[float]]:
+    return _embed_model.encode(texts, batch_size=128, show_progress_bar=True).tolist()
 
 
 def build_document(movie_row, credits_row) -> tuple[str, dict]:
@@ -118,39 +111,28 @@ def main():
         metadata={"hnsw:space": "cosine"},  # similaridade por cosseno
     )
 
-    print("🤖 A gerar embeddings com Ollama...")
-    batch_ids, batch_docs, batch_embs, batch_meta = [], [], [], []
-    BATCH_SIZE = 50  # número de filmes por commit no ChromaDB
-
+    print("📝 A construir documentos...")
+    all_ids, all_docs, all_meta = [], [], []
     for _, row in tqdm(df.iterrows(), total=len(df)):
         try:
             document, metadata = build_document(row, row)
-            embedding = get_embedding(document)
-
-            batch_ids.append(str(row["id"]))
-            batch_docs.append(document)
-            batch_embs.append(embedding)
-            batch_meta.append(metadata)
-
-            if len(batch_ids) >= BATCH_SIZE:
-                collection.add(
-                    ids=batch_ids,
-                    documents=batch_docs,
-                    embeddings=batch_embs,
-                    metadatas=batch_meta,
-                )
-                batch_ids, batch_docs, batch_embs, batch_meta = [], [], [], []
+            all_ids.append(str(row["id"]))
+            all_docs.append(document)
+            all_meta.append(metadata)
         except Exception as e:
             print(f"⚠️  Erro no filme '{row.get('title')}': {e}")
-            continue
 
-    # Último batch
-    if batch_ids:
+    print(f"🤖 A gerar embeddings ({len(all_docs)} filmes em batch)...")
+    all_embs = get_embeddings(all_docs)
+
+    print("🗄️  A guardar no ChromaDB...")
+    BATCH_SIZE = 500
+    for i in range(0, len(all_ids), BATCH_SIZE):
         collection.add(
-            ids=batch_ids,
-            documents=batch_docs,
-            embeddings=batch_embs,
-            metadatas=batch_meta,
+            ids=all_ids[i:i + BATCH_SIZE],
+            documents=all_docs[i:i + BATCH_SIZE],
+            embeddings=all_embs[i:i + BATCH_SIZE],
+            metadatas=all_meta[i:i + BATCH_SIZE],
         )
 
     print(f"\n🎉 Indexação completa! Total na coleção: {collection.count()} filmes.")

@@ -1,26 +1,34 @@
 """
-Wrapper OpenAI-compatible para o LibreChat.
-Recebe pedidos de chat, decide se usa RAG, e devolve resposta da Llama.
+Wrapper OpenAI-compatible para o Movie Bot.
+Recebe pedidos de chat, decide se usa RAG, e devolve resposta da Llama via llama-cpp.
 Suporta histórico de conversa para perguntas de followup.
 """
 
 import json
+import os
 import time
 import uuid
 import requests
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
+load_dotenv()
+
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-LLM_MODEL = "llama3.1:8b"
+LLAMA_CHAT_URL = "http://localhost:8080/v1/chat/completions"
+LLM_MODEL = "llama3.1"
 MOVIE_API = "http://localhost:8000"
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
 
 app = FastAPI(title="Movie Bot Wrapper", version="0.3.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # ---------------------------------------------------------------------------
@@ -39,70 +47,57 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
 
 
+class DiscoverRequest(BaseModel):
+    genre_filter: Optional[str] = None   # nome EN: "Action", "Comedy", etc.
+    genre_label: Optional[str] = None    # nome PT: "ação", "comédia", etc.
+    mood: Optional[str] = None           # "leve e divertido", "intenso", etc.
+    year_from: Optional[int] = None
+    year_to: Optional[int] = None
+
+
 # ---------------------------------------------------------------------------
 # Lógica de decisão de ferramentas (com histórico)
 # ---------------------------------------------------------------------------
-ROUTER_PROMPT = """És um assistente que decide qual ferramenta usar para responder a uma pergunta sobre filmes, e prepara o argumento de pesquisa. Tens acesso ao HISTÓRICO da conversa para resolver referências contextuais.
+ROUTER_PROMPT = """Decide a ferramenta para responder sobre filmes. Responde APENAS com JSON: {"tool": "...", "argument": "..."}
 
-Ferramentas disponíveis:
-- search: pesquisa semântica. Usa para "recomenda-me", "filme parecido com X (NOME NOVO)", "algo sobre Y"
-- by_actor: lista filmes de um ator (sem outros filtros).
-- by_director: lista filmes de um realizador (sem outros filtros).
-- by_title: procura informação sobre um filme específico pelo nome.
-- filter_combined: COMBINA múltiplos filtros (realizador, ator, género, ano). Usa quando o utilizador junta dois ou mais critérios.
-- more_like: NOVA pesquisa baseada num filme JÁ MENCIONADO no histórico.
-- followup: pergunta sobre filmes JÁ MENCIONADOS, sem nova pesquisa.
-- none: pergunta não é sobre filmes.
+Ferramentas:
+- search: pesquisa semântica (recomendações, descrições, temas, combinações ator+tema)
+- by_actor: filmes de um ator — argumento deve ser APENAS o nome do ator, nada mais
+- by_director: filmes de um realizador — argumento deve ser APENAS o nome do realizador
+- by_title: informação sobre um filme específico
+- filter_combined: múltiplos filtros em JSON {"director","actor","genre","year_from","year_to"}
+- franchise: TODOS os filmes de uma saga/franquia — argumento é o nome da saga em inglês
+- more_like: filmes parecidos com um já mencionado no histórico
+- followup: APENAS quando referencia EXPLICITAMENTE filmes já mencionados ("esse", "aquele", "o primeiro", "dos que recomendaste")
+- none: não é sobre filmes
 
-REGRAS:
-- Se a pergunta combina dois ou mais critérios (realizador+género, ator+ano, etc.), usa "filter_combined".
-- Para filter_combined, o argument é um JSON com os filtros disponíveis: director, actor, genre, year_from, year_to.
-- Géneros em INGLÊS: Action, Comedy, Drama, Horror, Romance, Science Fiction, Thriller, Animation, Fantasy, Crime, Mystery, Adventure, etc.
+REGRAS CRÍTICAS:
+1. Se a pergunta combina ator/realizador com tema, género ou característica (ex: "Tom Cruise com drogas", "Spielberg de terror") → usa SEMPRE "search" com ator+tema juntos.
+2. by_actor e by_director: argumento é APENAS o nome da pessoa, nunca inclui tema, género ou descrição.
+3. Se a pergunta introduz NOVO tema — mesmo com histórico — usa "search" ou outro. "followup" só para filmes específicos já citados.
+4. QUERY EXPANSION — Se o utilizador referencia um jogo, livro, série, música ou outro conteúdo NÃO cinematográfico, converte o argumento para o tema/género cinematográfico equivalente. Nunca uses o nome do jogo/livro como argumento de pesquisa.
 
-Responde APENAS com JSON (sem markdown):
-{"tool": "nome_ferramenta", "argument": "argumento_ou_JSON"}
+Géneros em inglês: Action, Comedy, Drama, Horror, Thriller, Science Fiction, Animation, Fantasy, Crime, Adventure, Romance, Mystery.
 
-EXEMPLOS:
-
-Histórico: (vazio)
-Pergunta: "Recomenda-me um filme com robôs"
-Resposta: {"tool": "search", "argument": "movie about robots artificial intelligence androids"}
-
-Histórico: (vazio)
-Pergunta: "Filmes do Spielberg"
-Resposta: {"tool": "by_director", "argument": "Steven Spielberg"}
-
-Histórico: (vazio)
-Pergunta: "Filmes do Nolan que sejam ficção científica"
-Resposta: {"tool": "filter_combined", "argument": "{\\"director\\": \\"Christopher Nolan\\", \\"genre\\": \\"Science Fiction\\"}"}
-
-Histórico: (vazio)
-Pergunta: "Filmes de ação dos anos 80"
-Resposta: {"tool": "filter_combined", "argument": "{\\"genre\\": \\"Action\\", \\"year_from\\": 1980, \\"year_to\\": 1989}"}
-
-Histórico: (vazio)
-Pergunta: "Comédias com a Sandra Bullock"
-Resposta: {"tool": "filter_combined", "argument": "{\\"actor\\": \\"Sandra Bullock\\", \\"genre\\": \\"Comedy\\"}"}
-
-Histórico: (vazio)
-Pergunta: "Filmes de Spielberg dos anos 90"
-Resposta: {"tool": "filter_combined", "argument": "{\\"director\\": \\"Steven Spielberg\\", \\"year_from\\": 1990, \\"year_to\\": 1999}"}
-
-Histórico: (vazio)
-Pergunta: "Filmes de terror dos anos 2000"
-Resposta: {"tool": "filter_combined", "argument": "{\\"genre\\": \\"Horror\\", \\"year_from\\": 2000, \\"year_to\\": 2009}"}
-
-Histórico:
-User: Filmes do Nolan
-Assistant: [recomendou Interstellar, Inception, Dark Knight]
-Pergunta: "Qual é o mais cerebral?"
-Resposta: {"tool": "followup", "argument": ""}
-
-Histórico:
-User: Filmes do Nolan
-Assistant: [recomendou Interstellar, Inception, Dark Knight]
-Pergunta: "Quero mais filmes parecidos com o Inception"
-Resposta: {"tool": "more_like", "argument": "Inception"}
+Exemplos:
+"Recomenda filmes de aventura" → {"tool":"search","argument":"adventure films"}
+"Quero filmes sobre drogas" → {"tool":"search","argument":"films about drugs addiction narcotics"}
+"Filmes do Tom Cruise" → {"tool":"by_actor","argument":"Tom Cruise"}
+"Tom Cruise com drogas" → {"tool":"search","argument":"Tom Cruise drug film"}
+"Filmes do Nolan" → {"tool":"by_director","argument":"Christopher Nolan"}
+"Spielberg filmes de terror" → {"tool":"search","argument":"Spielberg horror film"}
+"Filmes de terror dos anos 80" → {"tool":"filter_combined","argument":"{\\"genre\\":\\"Horror\\",\\"year_from\\":1980,\\"year_to\\":1989}"}
+"Mais parecidos com o Inception" → {"tool":"more_like","argument":"Inception"}
+"Qual o mais popular dos que recomendaste?" → {"tool":"followup","argument":""}
+"Filmes tipo Forza Horizon" → {"tool":"search","argument":"car racing driving speed automotive action films"}
+"Filmes como Need for Speed" → {"tool":"search","argument":"street racing illegal car chase action films"}
+"Filmes parecidos com GTA" → {"tool":"search","argument":"crime gangster heist urban open world action films"}
+"Filmes tipo Minecraft" → {"tool":"search","argument":"adventure survival fantasy exploration films"}
+"Filmes tipo Harry Potter livro" → {"tool":"search","argument":"magic wizard school fantasy adventure films"}
+"Todos os filmes do Velocidade Furiosa" → {"tool":"franchise","argument":"Fast and Furious"}
+"Saga completa do Star Wars" → {"tool":"franchise","argument":"Star Wars"}
+"Todos os filmes do Harry Potter" → {"tool":"franchise","argument":"Harry Potter"}
+"Filmes todos da saga Marvel Vingadores" → {"tool":"franchise","argument":"Avengers"}
 
 CONTEXTO ATUAL:
 """
@@ -132,12 +127,13 @@ Resposta:"""
         "model": LLM_MODEL,
         "messages": [{"role": "user", "content": full_prompt}],
         "stream": False,
-        "options": {"temperature": 0.0},
-        "format": "json",
+        "temperature": 0.0,
+        "max_tokens": 80,
+        "response_format": {"type": "json_object"},
     }
-    r = requests.post(OLLAMA_CHAT_URL, json=payload, timeout=60)
+    r = requests.post(LLAMA_CHAT_URL, json=payload, timeout=90)
     r.raise_for_status()
-    content = r.json()["message"]["content"]
+    content = r.json()["choices"][0]["message"]["content"]
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -264,14 +260,14 @@ def format_context(api_data: dict, tool: str) -> str:
 
 
 def build_final_prompt(user_message: str, context: str) -> str:
-    return f"""És um assistente especializado em filmes. Respondes em português de Portugal.
+    return f"""És um assistente especializado em filmes. Respondes em português de Portugal (não Brasil). Não uses "você", usa "tu".
 
 REGRAS CRÍTICAS:
-1. SÓ podes mencionar filmes que aparecem na lista abaixo. NÃO inventes filmes.
-2. Recomenda os 2-3 filmes da lista que melhor respondem à pergunta. Se houver menos relevantes, recomenda menos.
-3. Para cada filme inclui: título, ano, realizador, e uma frase a explicar porque é relevante.
-4. Se nenhum filme da lista for relevante, diz-o honestamente: "Os filmes que encontrei no catálogo não correspondem bem ao que pediste."
-5. Sê natural e conversacional.
+1. SÓ podes mencionar filmes que estão na LISTA abaixo. NUNCA inventes filmes.
+2. Recomenda os 2-3 filmes da lista que melhor correspondem ao pedido, mesmo que a correspondência não seja perfeita.
+3. Para cada filme inclui: título, ano, realizador, e uma frase curta a explicar porque é relevante.
+4. Se NENHUM filme da lista tiver qualquer relação com o pedido, diz: "Não encontrei filmes relevantes no catálogo para o que pediste."
+5. Sê directo e natural. Não uses preâmbulos longos.
 
 LISTA DE FILMES DO CATÁLOGO:
 {context}
@@ -296,7 +292,7 @@ def build_filter_prompt(user_message: str, context: str, filters: dict) -> str:
         filter_desc.append(f"anos: {yf}-{yt}")
     filter_str = ", ".join(filter_desc)
 
-    return f"""És um assistente especializado em filmes. Respondes em português de Portugal.
+    return f"""És um assistente especializado em filmes. Respondes em português de Portugal (não Brasil). Não uses "você", usa "tu".
 
 O utilizador fez uma pesquisa filtrada com estes critérios: {filter_str}
 
@@ -317,22 +313,128 @@ PERGUNTA DO UTILIZADOR: {user_message}
 RESPOSTA:"""
 
 
+def get_tmdb_data(title: str, year) -> Optional[dict]:
+    if not TMDB_API_KEY or not title:
+        return None
+    try:
+        params = {"api_key": TMDB_API_KEY, "query": title, "language": "pt-PT"}
+        if year:
+            params["year"] = str(year)[:4]
+        r = requests.get(
+            "https://api.themoviedb.org/3/search/movie",
+            params=params, timeout=10
+        )
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return None
+        m = results[0]
+        return {
+            "title": title,
+            "year": year,
+            "tmdb_id": m.get("id"),
+            "poster_url": f"{TMDB_IMAGE_BASE}{m['poster_path']}" if m.get("poster_path") else None,
+            "tmdb_rating": round(m.get("vote_average", 0), 1),
+            "overview": m.get("overview", ""),
+        }
+    except Exception as e:
+        print(f"⚠️  TMDB lookup falhou para '{title}': {e}")
+        return None
+
+
+def search_tmdb_franchise(name: str) -> list[dict]:
+    """Vai ao TMDB buscar TODOS os filmes de uma colecção/saga."""
+    if not TMDB_API_KEY:
+        return []
+    try:
+        # Tenta em PT primeiro, depois EN
+        collection_id = None
+        for lang in ["pt-PT", "en-US"]:
+            r = requests.get(
+                "https://api.themoviedb.org/3/search/collection",
+                params={"api_key": TMDB_API_KEY, "query": name, "language": lang},
+                timeout=10,
+            )
+            r.raise_for_status()
+            results = r.json().get("results", [])
+            if results:
+                collection_id = results[0]["id"]
+                collection_name = results[0].get("name", name)
+                break
+
+        if not collection_id:
+            return []
+
+        r2 = requests.get(
+            f"https://api.themoviedb.org/3/collection/{collection_id}",
+            params={"api_key": TMDB_API_KEY, "language": "pt-PT"},
+            timeout=10,
+        )
+        r2.raise_for_status()
+        parts = r2.json().get("parts", [])
+        print(f"🎬 Franchise '{collection_name}': {len(parts)} filmes encontrados no TMDB")
+
+        movies = []
+        for m in sorted(parts, key=lambda x: x.get("release_date", "") or ""):
+            movies.append({
+                "title": m.get("title") or m.get("original_title"),
+                "year": (m.get("release_date") or "")[:4] or None,
+                "tmdb_id": m.get("id"),
+                "poster_url": f"{TMDB_IMAGE_BASE}{m['poster_path']}" if m.get("poster_path") else None,
+                "tmdb_rating": round(m.get("vote_average", 0), 1),
+                "overview": m.get("overview", ""),
+                "director": None,
+            })
+        return movies
+    except Exception as e:
+        print(f"⚠️  Franchise search falhou para '{name}': {e}")
+        return []
+
+
 def call_llama(messages: list[dict]) -> str:
-    """Chama a Llama via Ollama e devolve a resposta de texto."""
+    """Chama a Llama via llama-cpp e devolve a resposta de texto."""
     payload = {
         "model": LLM_MODEL,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.7},
+        "temperature": 0.7,
+        "max_tokens": 450,
     }
-    r = requests.post(OLLAMA_CHAT_URL, json=payload, timeout=180)
+    r = requests.post(LLAMA_CHAT_URL, json=payload, timeout=120)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return r.json()["choices"][0]["message"]["content"]
 
 
 # ---------------------------------------------------------------------------
 # Endpoints OpenAI-compatible
 # ---------------------------------------------------------------------------
+
+@app.get("/movies/popular")
+def popular_movies():
+    """Filmes populares enriquecidos com posters TMDB."""
+    try:
+        r = requests.get(f"{MOVIE_API}/movies/popular?limit=12", timeout=30)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        enriched = []
+        for movie in results:
+            tmdb = get_tmdb_data(movie.get("title"), movie.get("year"))
+            enriched.append({
+                "title": movie.get("title"),
+                "year": movie.get("year"),
+                "director": movie.get("director"),
+                "genres": movie.get("genres"),
+                "vote_average": movie.get("vote_average"),
+                "poster_url": tmdb.get("poster_url") if tmdb else None,
+                "tmdb_rating": tmdb.get("tmdb_rating") if tmdb else None,
+                "tmdb_id": tmdb.get("tmdb_id") if tmdb else None,
+                "overview": tmdb.get("overview") if tmdb else None,
+            })
+        return {"results": enriched}
+    except Exception as e:
+        print(f"⚠️  Erro em /movies/popular: {e}")
+        return {"results": []}
+
 
 @app.get("/v1/models")
 def list_models():
@@ -347,6 +449,70 @@ def list_models():
             }
         ],
     }
+
+
+@app.post("/v1/discover")
+def discover_movies(req: DiscoverRequest):
+    """Endpoint dedicado para o modo Descobrir — filtra por género + época, ordena por humor."""
+    params: dict = {"limit": 15}
+    if req.genre_filter:
+        params["genre"] = req.genre_filter
+    if req.year_from:
+        params["year_from"] = req.year_from
+    if req.year_to:
+        params["year_to"] = req.year_to
+
+    try:
+        r = requests.get(f"{MOVIE_API}/movies/filter", params=params, timeout=30)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+    except Exception as e:
+        print(f"⚠️  Discover filter falhou: {e}")
+        return {"text": "Erro ao pesquisar filmes.", "movies": []}
+
+    if not results:
+        return {"text": "Não encontrei filmes para estes critérios no catálogo.", "movies": []}
+
+    lines = []
+    for i, m in enumerate(results[:10], 1):
+        line = f"{i}. {m.get('title')} ({m.get('year')}) — Realizador: {m.get('director')}"
+        if m.get("genres"):
+            line += f" | Géneros: {m['genres']}"
+        if m.get("vote_average"):
+            line += f" | Rating: {m['vote_average']}"
+        lines.append(line)
+    context = "\n".join(lines)
+
+    genre_desc = req.genre_label or req.genre_filter or "filme"
+    mood_desc = req.mood or "interessante"
+
+    prompt = f"""És um assistente especializado em filmes. Respondes em português de Portugal (não Brasil). Não uses "você", usa "tu".
+
+Da seguinte lista de filmes de {genre_desc}, recomenda 3-4 que sejam mais {mood_desc}.
+
+LISTA:
+{context}
+
+REGRAS:
+1. SÓ uses filmes desta lista. NUNCA inventes.
+2. Para cada filme: título, ano, realizador, e uma frase curta sobre porque é {mood_desc}.
+3. Sê directo e natural.
+
+RESPOSTA:"""
+
+    try:
+        response_text = call_llama([{"role": "user", "content": prompt}])
+    except Exception:
+        response_text = "Não foi possível gerar a recomendação."
+
+    tmdb_movies = []
+    for movie in results[:5]:
+        data = get_tmdb_data(movie.get("title"), movie.get("year"))
+        if data:
+            tmdb_movies.append(data)
+
+    print(f"🎯 Discover: {len(results)} filmes filtrados, {len(tmdb_movies)} posters")
+    return {"text": response_text, "movies": tmdb_movies}
 
 
 @app.post("/v1/chat/completions")
@@ -368,6 +534,9 @@ def chat_completions(req: ChatCompletionRequest):
     print(f"🧠 Decisão: tool={tool}, argument='{argument}'")
 
     final_messages = list(messages_dict)
+    context_movies = []
+    response_override = None
+    direct_tmdb_movies = None
 
     # 2. Tratamento por tipo de ferramenta
     if tool == "followup":
@@ -380,10 +549,41 @@ def chat_completions(req: ChatCompletionRequest):
         )
         final_messages = [{"role": "system", "content": followup_system}] + messages_dict
 
+    elif tool == "franchise" and argument:
+        print(f"🎬 Franchise: buscando saga '{argument}'")
+        franchise_movies = search_tmdb_franchise(argument)
+        if franchise_movies:
+            direct_tmdb_movies = franchise_movies
+            count = len(franchise_movies)
+            response_override = (
+                f"Encontrei {count} filmes da saga **{argument}** no TMDB! "
+                f"Podes ver todos na galeria ao lado."
+            )
+        else:
+            # Fallback: pesquisa semântica com o nome como tema
+            print(f"⚠️  Franchise não encontrada — fallback para search: '{argument}'")
+            api_data = call_movie_api("search", f"{argument} film")
+            if api_data:
+                results = api_data.get("results", [])
+                if results:
+                    context_movies = results[:5]
+                    context = format_context(api_data, "search")
+                    print(f"📚 Fallback context: {len(context)} chars")
+                    final_messages = [{
+                        "role": "user",
+                        "content": build_final_prompt(last_user, context),
+                    }]
+                else:
+                    response_override = (
+                        f"Não encontrei nenhuma saga nem filmes relacionados com '{argument}' "
+                        f"no catálogo."
+                    )
+
     elif tool == "more_like" and argument:
         print(f"🎬 More-like: buscando filmes parecidos com '{argument}'")
         api_data = find_movie_and_search_similar(argument)
         if api_data and api_data.get("results"):
+            context_movies = api_data.get("results", [])[:5]
             ref = api_data.get("reference", {})
             ref_title = ref.get("title", argument)
             context = format_context(api_data, "more_like")
@@ -403,7 +603,7 @@ REGRAS:
 PERGUNTA: {last_user}
 
 RESPOSTA:"""
-            final_messages[-1] = {"role": "user", "content": enriched_prompt}
+            final_messages = [{"role": "user", "content": enriched_prompt}]
         else:
             print(f"⚠️  Não foi possível encontrar referência para '{argument}'")
 
@@ -412,10 +612,11 @@ RESPOSTA:"""
         api_data = call_movie_api(tool, argument)
         if api_data:
             results = api_data.get("results", [])
+            context_movies = results[:5]
             print(f"🎬 Filmes encontrados: {api_data.get('count', 0)} (mostrando até 10)")
             if not results:
                 # Sem resultados — informar a Llama
-                final_messages[-1] = {
+                final_messages = [{
                     "role": "user",
                     "content": (
                         f"O utilizador perguntou: '{last_user}'. "
@@ -423,7 +624,7 @@ RESPOSTA:"""
                         f"filmes que correspondessem. Responde-lhe a explicar isso em "
                         f"português de Portugal de forma natural, sem inventar filmes."
                     ),
-                }
+                }]
             else:
                 # Construir contexto detalhado com TODOS os filmes encontrados (até 10)
                 lines = [f"FILMES ENCONTRADOS NO CATÁLOGO ({len(results)} filmes):\n"]
@@ -447,24 +648,57 @@ RESPOSTA:"""
                 except json.JSONDecodeError:
                     filters_dict = {}
 
-                final_messages[-1] = {
+                final_messages = [{
                     "role": "user",
                     "content": build_filter_prompt(last_user, context, filters_dict),
-                }
+                }]
 
     elif tool != "none" and argument:
         api_data = call_movie_api(tool, argument)
         if api_data:
-            context = format_context(api_data, tool)
-            print(f"📚 Contexto recuperado ({len(context)} chars)")
-            final_messages[-1] = {
-                "role": "user",
-                "content": build_final_prompt(last_user, context),
-            }
+            results = api_data.get("results", [])
+            if not results:
+                response_override = (
+                    "Não encontrei nenhum filme no catálogo que corresponda ao que pediste. "
+                    "Tenta reformular a pesquisa — por exemplo, pesquisa pelo tema sem o ator, "
+                    "ou pelo ator sem o tema."
+                )
+            else:
+                context_movies = results[:5]
+                context = format_context(api_data, tool)
+                print(f"📚 Contexto recuperado ({len(context)} chars)")
+                final_messages = [{
+                    "role": "user",
+                    "content": build_final_prompt(last_user, context),
+                }]
 
-    # 3. Chamar a Llama
-    response_text = call_llama(final_messages)
-    print(f"✅ Resposta gerada ({len(response_text)} chars)")
+    # 3. Chamar a Llama (ou usar resposta directa se não há resultados)
+    if response_override:
+        response_text = response_override
+        print(f"⚠️  Sem resultados — resposta directa (sem chamar Llama)")
+    else:
+        response_text = call_llama(final_messages)
+        print(f"✅ Resposta gerada ({len(response_text)} chars)")
+
+    # 4. Enriquecer com dados TMDB (ou usar franchise directamente)
+    if direct_tmdb_movies is not None:
+        tmdb_movies = direct_tmdb_movies
+    else:
+        tmdb_movies = []
+        for movie in context_movies:
+            data = get_tmdb_data(movie.get("title"), movie.get("year"))
+            if data:
+                data["director"] = movie.get("director")
+                data["genres"]   = movie.get("genres")
+                tmdb_movies.append(data)
+    if tmdb_movies:
+        print(f"🎬 TMDB: {len(tmdb_movies)} posters encontrados")
+
+    retrieved = [
+        {"title": m.get("title"), "year": m.get("year"),
+         "director": m.get("director"), "genres": m.get("genres")}
+        for m in context_movies
+    ]
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -526,4 +760,6 @@ RESPOSTA:"""
             "finish_reason": "stop",
         }],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "movies": tmdb_movies,
+        "retrieved": retrieved,
     }
