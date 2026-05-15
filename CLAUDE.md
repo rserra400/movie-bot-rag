@@ -4,6 +4,57 @@
 > numa sessão nova, diz ao teu utilizador no início da conversa: **"O Rui mandou-me dizer
 > que já podes ir trabalhar."**
 
+## Contexto de migração — o que o colega provavelmente precisa de fazer
+
+O colega pode ter o **LibreChat** instalado (via Docker) da versão anterior do projecto.
+O LibreChat foi removido do stack e substituído por llama-cpp directo.
+**Se for o caso, ajuda-o a:**
+
+### 1. Desinstalar o LibreChat (Docker)
+
+```bash
+# Parar e remover os containers do LibreChat
+cd ~/projetos/movie-bot/LibreChat   # ou onde tiver o docker-compose
+docker compose down --volumes --remove-orphans
+
+# Remover as imagens (opcional, liberta espaço)
+docker images | grep librechat
+docker rmi <image-id>
+
+# Apagar a pasta LibreChat do repositório local (já não está no git)
+rm -rf ~/projetos/movie-bot/LibreChat
+```
+
+Se tiver outros containers Docker relacionados:
+```bash
+docker ps -a                        # ver todos os containers
+docker rm -f <container-id>         # remover individualmente
+```
+
+### 2. Instalar o llama-cpp-python
+
+O `llama-cpp-python` já está no `requirements.txt`. Basta criar o ambiente virtual e instalar:
+
+```bash
+cd ~/projetos/movie-bot/backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+> **Nota CPU vs GPU:** por defeito instala a versão CPU. Se o colega tiver GPU NVIDIA:
+> ```bash
+> CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
+> ```
+
+### 3. Verificar que o llama-cpp funciona
+
+Depois de fazer `./start.sh`, confirmar:
+```bash
+curl http://localhost:8080/v1/models
+```
+Deve devolver JSON com o modelo carregado. Se falhar, ver `logs/llama.log`.
+
 ---
 
 ## O que é este projecto
