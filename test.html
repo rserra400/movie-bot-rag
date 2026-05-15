@@ -6,15 +6,16 @@
 <title>MovieBot</title>
 <style>
   :root {
-    --bg:       #0a0a0f;
-    --surface:  #111827;
-    --surface2: #1f2937;
+    --bg:       #080c14;
+    --surface:  #0e1622;
+    --surface2: #172030;
     --accent:   #e94560;
     --accent2:  #ff6b6b;
     --gold:     #f5c518;
-    --text:     #f0f0f0;
-    --muted:    #6b7280;
-    --border:   #1f2937;
+    --text:     #e8ecf4;
+    --muted:    #566178;
+    --border:   #1c2840;
+    --glass:    rgba(14,22,34,0.88);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -26,27 +27,52 @@
   /* ── NAVBAR ── */
   nav {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0 28px; height: 56px; flex-shrink: 0;
-    background: linear-gradient(90deg, #0a0a0f 0%, #120810 60%, #0a0a0f 100%);
-    border-bottom: 1px solid #1a0d14;
+    padding: 0 28px; height: 58px; flex-shrink: 0;
+    background: var(--glass);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(233,69,96,0.12);
+    box-shadow: 0 1px 24px rgba(0,0,0,0.4);
+    position: relative; z-index: 10;
   }
+  .nav-left  { display: flex; align-items: center; gap: 14px; }
+  .nav-right { display: flex; align-items: center; gap: 10px; }
   .logo {
-    font-size: 1.5rem; font-weight: 900; letter-spacing: 3px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    font-size: 1.45rem; font-weight: 900; letter-spacing: 3px;
+    background: linear-gradient(135deg, var(--accent) 30%, var(--accent2));
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 0 12px rgba(233,69,96,0.4));
+    filter: drop-shadow(0 0 14px rgba(233,69,96,0.5));
   }
   .logo span { -webkit-text-fill-color: var(--text); }
-  .tagline { font-size: 0.72rem; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .tagline { font-size: 0.68rem; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .nav-status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.65rem; color: var(--muted); letter-spacing: .5px;
+  }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #22c55e;
+    box-shadow: 0 0 6px #22c55e; flex-shrink: 0;
+    animation: pulse-dot 2.5s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.45; }
+  }
+  .nav-badge {
+    font-size: 0.6rem; padding: 2px 8px; border-radius: 20px;
+    background: rgba(233,69,96,.12); color: var(--accent);
+    border: 1px solid rgba(233,69,96,.25); font-weight: 700; letter-spacing: .5px;
+  }
 
   /* ── MAIN LAYOUT ── */
   .main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
 
   /* ── CHAT PANEL ── */
   .chat-panel {
-    width: 370px; flex-shrink: 0;
+    width: 375px; flex-shrink: 0;
     display: flex; flex-direction: column;
-    background: var(--surface); border-right: 1px solid var(--border);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    box-shadow: 2px 0 20px rgba(0,0,0,0.3);
   }
 
   /* ── TABS ── */
@@ -76,18 +102,22 @@
     scrollbar-width: thin; scrollbar-color: var(--border) transparent;
   }
   .msg {
-    max-width: 90%; padding: 9px 13px; line-height: 1.6;
-    white-space: pre-wrap; font-size: 0.85rem;
+    max-width: 92%; padding: 10px 14px; line-height: 1.65;
+    white-space: pre-wrap; font-size: 0.84rem;
   }
   .user {
     align-self: flex-end;
-    background: linear-gradient(135deg, var(--accent), #c0392b);
-    color: #fff; border-radius: 14px 14px 3px 14px;
+    background: linear-gradient(135deg, var(--accent) 0%, #b83050 100%);
+    color: #fff; border-radius: 16px 16px 4px 16px;
+    box-shadow: 0 4px 14px rgba(233,69,96,0.3);
   }
   .bot {
     align-self: flex-start;
     background: var(--surface2); color: var(--text);
-    border-radius: 14px 14px 14px 3px; border: 1px solid var(--border);
+    border-radius: 4px 16px 16px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.25);
   }
   .typing {
     align-self: flex-start;
@@ -124,24 +154,25 @@
     background: var(--surface); border-top: 1px solid var(--border);
   }
   #input {
-    flex: 1; padding: 10px 14px; border-radius: 10px;
+    flex: 1; padding: 10px 16px; border-radius: 12px;
     border: 1px solid var(--border);
     background: var(--surface2); color: var(--text);
-    font-size: 0.85rem; outline: none;
+    font-size: 0.84rem; outline: none;
     transition: border-color .2s, box-shadow .2s;
   }
   #input::placeholder { color: var(--muted); }
-  #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(233,69,96,.15); }
+  #input:focus { border-color: rgba(233,69,96,.5); box-shadow: 0 0 0 3px rgba(233,69,96,.1); }
   #send-btn {
-    width: 40px; height: 40px; border-radius: 10px; border: none;
-    background: linear-gradient(135deg, var(--accent), #c0392b);
+    width: 42px; height: 42px; border-radius: 12px; border: none;
+    background: linear-gradient(135deg, var(--accent), #b83050);
     color: #fff; font-size: 1rem; cursor: pointer;
-    transition: opacity .2s, transform .1s;
+    transition: opacity .2s, transform .1s, box-shadow .2s;
     display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 12px rgba(233,69,96,0.35);
   }
-  #send-btn:hover { opacity: 0.85; }
-  #send-btn:active { transform: scale(0.94); }
-  #send-btn:disabled { opacity: 0.3; cursor: default; }
+  #send-btn:hover { opacity: 0.88; box-shadow: 0 6px 18px rgba(233,69,96,0.45); }
+  #send-btn:active { transform: scale(0.93); }
+  #send-btn:disabled { opacity: 0.25; cursor: default; box-shadow: none; }
 
   /* ── DISCOVER PANEL ── */
   .qa-panel {
@@ -180,16 +211,27 @@
 
   /* ── MOVIES PANEL ── */
   .movies-panel {
-    flex: 1; overflow-y: auto; padding: 20px 22px;
+    flex: 1; overflow-y: auto; padding: 22px 24px;
     background: var(--bg);
     scrollbar-width: thin; scrollbar-color: var(--border) transparent;
   }
-  .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-  .section-title  { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.5px; }
+  .section-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .section-header::after {
+    content: ''; position: absolute; bottom: -1px; left: 0;
+    width: 48px; height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    border-radius: 2px;
+  }
+  .section-title  { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.3px; }
   .section-badge  {
-    font-size: 0.65rem; padding: 3px 9px; border-radius: 20px;
-    background: rgba(233,69,96,.18); color: var(--accent);
-    border: 1px solid rgba(233,69,96,.3); font-weight: 700; letter-spacing: .5px;
+    font-size: 0.62rem; padding: 3px 10px; border-radius: 20px;
+    background: rgba(233,69,96,.14); color: var(--accent);
+    border: 1px solid rgba(233,69,96,.28); font-weight: 700; letter-spacing: .5px;
   }
 
   /* ── RAG PANEL ── */
@@ -218,54 +260,96 @@
   /* ── MOVIE GRID ── */
   .movies-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+    gap: 16px;
   }
 
   /* ── MOVIE CARD ── */
   .movie-card {
-    position: relative; border-radius: 10px; overflow: hidden;
-    aspect-ratio: 2/3; cursor: pointer; background: var(--surface2);
-    transition: transform .22s ease, box-shadow .22s ease;
+    position: relative; border-radius: 12px; overflow: hidden;
+    aspect-ratio: 2/3; cursor: pointer;
+    background: var(--surface2);
+    border: 1px solid rgba(255,255,255,.05);
+    transition: transform .25s cubic-bezier(.25,.8,.25,1),
+                box-shadow .25s ease;
+    animation: card-in .35s ease both;
+  }
+  @keyframes card-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .movie-card:hover {
-    transform: translateY(-6px) scale(1.03);
-    box-shadow: 0 16px 40px rgba(233,69,96,.25), 0 4px 12px rgba(0,0,0,.6);
+    transform: translateY(-7px) scale(1.025);
+    box-shadow: 0 20px 50px rgba(233,69,96,.22),
+                0 8px 20px rgba(0,0,0,.7);
     z-index: 3;
+    border-color: rgba(233,69,96,.25);
   }
-  .movie-card img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter .22s; }
-  .movie-card:hover img { filter: brightness(0.3); }
+  .movie-card img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    transition: filter .28s ease;
+  }
+  .movie-card:hover img { filter: brightness(0.18) saturate(0.5); }
+
+  /* Overlay: mostra info em baixo por defeito; em hover cobre tudo */
   .card-overlay {
     position: absolute; inset: 0;
-    background: linear-gradient(to top, rgba(0,0,0,.85) 40%, transparent 100%);
+    background: linear-gradient(to top, rgba(0,0,0,.92) 35%, rgba(0,0,0,.1) 70%, transparent 100%);
     display: flex; flex-direction: column; justify-content: flex-end;
-    padding: 10px; transition: background .22s;
+    padding: 11px; transition: background .28s ease;
   }
   .movie-card:hover .card-overlay {
-    background: transparent;
-    justify-content: center; align-items: center; text-align: center; padding: 12px;
+    background: rgba(0,0,0,.1);
+    justify-content: center; align-items: center; text-align: center; padding: 14px;
+    gap: 5px;
   }
-  .card-title { font-size: 0.75rem; font-weight: 700; color: #fff; line-height: 1.3; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
-  .card-year  { font-size: 0.65rem; color: rgba(255,255,255,.6); margin-top: 2px; }
-  .card-score { font-size: 0.7rem; color: var(--gold); margin-top: 3px; font-weight: 700; }
-  .card-dir   { font-size: 0.63rem; color: rgba(255,255,255,.55); margin-top: 4px; }
+
+  /* Info visível por defeito (em baixo) */
+  .card-default-info { transition: opacity .2s ease; }
+  .movie-card:hover .card-default-info { opacity: 0; pointer-events: none; }
+
+  /* Info visível no hover (centrada) */
+  .card-hover-info {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; text-align: center;
+    padding: 14px; gap: 5px;
+    opacity: 0; transition: opacity .25s ease;
+    pointer-events: none;
+  }
+  .movie-card:hover .card-hover-info { opacity: 1; }
+
+  .card-title { font-size: 0.76rem; font-weight: 800; color: #fff; line-height: 1.3; text-shadow: 0 1px 6px rgba(0,0,0,1); }
+  .card-year  { font-size: 0.64rem; color: rgba(255,255,255,.55); margin-top: 2px; }
+  .card-score { font-size: 0.72rem; color: var(--gold); font-weight: 700; }
+  .card-dir   { font-size: 0.62rem; color: rgba(255,255,255,.5); }
+
+  /* Genre tags */
+  .card-genres { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; margin-top: 4px; }
+  .card-genre  {
+    font-size: 0.57rem; padding: 2px 7px; border-radius: 20px;
+    background: rgba(233,69,96,.25); border: 1px solid rgba(233,69,96,.45);
+    color: rgba(255,255,255,.9); font-weight: 700; letter-spacing: .3px;
+  }
+
   .no-poster {
     width: 100%; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 6px; color: #333; font-size: 2.2rem;
+    gap: 8px; font-size: 2.4rem;
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%);
   }
-  .no-poster-label { font-size: 0.65rem; color: var(--muted); text-align: center; padding: 0 8px; }
+  .no-poster-label { font-size: 0.64rem; color: var(--muted); text-align: center; padding: 0 10px; line-height: 1.4; }
 
   /* ── SKELETON ── */
-  .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 14px; }
+  .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 16px; }
   .skeleton {
-    aspect-ratio: 2/3; border-radius: 10px;
-    background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
-    background-size: 200% 100%; animation: shimmer 1.6s infinite ease-in-out;
+    aspect-ratio: 2/3; border-radius: 12px;
+    background: linear-gradient(90deg, var(--surface) 20%, var(--surface2) 50%, var(--surface) 80%);
+    background-size: 300% 100%; animation: shimmer 1.8s infinite ease-in-out;
+    border: 1px solid rgba(255,255,255,.04);
   }
   @keyframes shimmer {
-    0%   { background-position: -200% 0; }
-    100% { background-position:  200% 0; }
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
   }
 
   /* ── WATCHLIST BAR ── */
@@ -348,8 +432,9 @@
   #modal-overlay.open { display: flex; }
   #modal-box {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 16px; max-width: 560px; width: 100%; max-height: 88vh; overflow-y: auto;
-    position: relative; animation: fadeUp .2s ease;
+    border-radius: 18px; max-width: 560px; width: 100%; max-height: 88vh; overflow-y: auto;
+    position: relative; animation: fadeUp .22s cubic-bezier(.25,.8,.25,1);
+    box-shadow: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(233,69,96,.1);
   }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(14px); }
@@ -397,8 +482,17 @@
 <body>
 
 <nav>
-  <div class="logo">MOVIE<span>BOT</span></div>
-  <div class="tagline">Recomendações com IA · RAG</div>
+  <div class="nav-left">
+    <div class="logo">MOVIE<span>BOT</span></div>
+    <div class="tagline">Recomendações com IA · RAG</div>
+  </div>
+  <div class="nav-right">
+    <div class="nav-status">
+      <div class="status-dot"></div>
+      Online
+    </div>
+    <div class="nav-badge">RAG · LLaMA 3.1</div>
+  </div>
 </nav>
 
 <div class="main">
@@ -562,23 +656,40 @@ function renderMovies(movies) {
       ? `★ ${m.tmdb_rating}`
       : m.vote_average ? `★ ${parseFloat(m.vote_average).toFixed(1)}` : "";
     const dir = m.director || "";
+    const genreTags = (m.genres || "")
+      .split(",").map(g => g.trim()).filter(Boolean).slice(0, 2)
+      .map(g => `<span class="card-genre">${g}</span>`).join("");
 
     if (m.poster_url) {
       card.innerHTML = `
         <img src="${m.poster_url}" alt="" loading="lazy">
         <div class="card-overlay">
+          <div class="card-default-info">
+            <div class="card-title">${m.title}</div>
+            <div class="card-year">${year}${rating ? ` · ${rating}` : ""}</div>
+          </div>
+        </div>
+        <div class="card-hover-info">
           <div class="card-title">${m.title}</div>
           <div class="card-year">${year}</div>
           ${rating ? `<div class="card-score">${rating}</div>` : ""}
           ${dir    ? `<div class="card-dir">${dir}</div>` : ""}
+          ${genreTags ? `<div class="card-genres">${genreTags}</div>` : ""}
         </div>`;
     } else {
       card.innerHTML = `
         <div class="no-poster">🎬<div class="no-poster-label">${m.title}</div></div>
         <div class="card-overlay">
+          <div class="card-default-info">
+            <div class="card-title">${m.title}</div>
+            <div class="card-year">${year}${rating ? ` · ${rating}` : ""}</div>
+          </div>
+        </div>
+        <div class="card-hover-info">
           <div class="card-title">${m.title}</div>
           <div class="card-year">${year}</div>
           ${rating ? `<div class="card-score">${rating}</div>` : ""}
+          ${genreTags ? `<div class="card-genres">${genreTags}</div>` : ""}
         </div>`;
     }
     const saveBtn = document.createElement('button');
