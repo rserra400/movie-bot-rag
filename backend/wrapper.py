@@ -29,6 +29,14 @@ MOVIE_API = "http://localhost:8000"
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
 
+# ---------------------------------------------------------------------------
+# Caches em memória com TTL
+# ---------------------------------------------------------------------------
+_api_cache:  dict[str, tuple[float, Optional[dict]]] = {}
+_tmdb_cache: dict[str, tuple[float, Optional[dict]]] = {}
+_API_TTL  = 300   # 5 min para resultados ChromaDB
+_TMDB_TTL = 3600  # 1h para dados TMDB (posters não mudam)
+
 app = FastAPI(title="Movie Bot Wrapper", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -145,6 +153,37 @@ _MOVIE_KEYWORDS = [
     "género", "genero", "curta", "longa", "animaç", "documentário",
     "ver um", "ver uns", "sugere", "sugerir", "conheces algum",
 ]
+
+
+# Tradução PT→EN para melhorar a pesquisa semântica no ChromaDB (corpus em inglês)
+_PT_EN_SEARCH = [
+    (r'\bde ação\b|\bde acção\b',                  'action'),
+    (r'\bde aventura\b',                            'adventure'),
+    (r'\bde terror\b|\bde horror\b',                'horror'),
+    (r'\bde comédia\b|\bde comedia\b',              'comedy'),
+    (r'\bde drama\b',                               'drama'),
+    (r'\bde ficção científica\b|\bde ficcao cientifica\b|\bsci-fi\b', 'science fiction'),
+    (r'\bde animação\b|\bde animacao\b',            'animation'),
+    (r'\bde fantasia\b',                            'fantasy'),
+    (r'\bde romance\b|\bde amor\b',                 'romance love'),
+    (r'\bde crime\b',                               'crime'),
+    (r'\bde mistério\b|\bde misterio\b',            'mystery'),
+    (r'\bde suspense\b',                            'thriller suspense'),
+    (r'\bde guerra\b',                              'war'),
+    (r'\bsobre drogas\b',                           'about drugs narcotics addiction'),
+    (r'\bsobre amor\b',                             'about love romance'),
+    (r'\bsobre família\b|\bsobre familia\b',        'about family'),
+    (r'\bsobre espionagem\b',                       'spy espionage'),
+    (r'\bsobre espaço\b|\bsobre espaco\b',          'space'),
+    (r'\bfilmes?\b',                                'films'),
+    (r'\b(?:recomend[ae]|sugere|quero|gostava\s+de\s+ver|podes?\s+(?:recomendar|sugerir))\b', ''),
+]
+
+def _translate_search_query(text: str) -> str:
+    result = text
+    for pattern, repl in _PT_EN_SEARCH:
+        result = re.sub(pattern, repl, result, flags=re.I)
+    return ' '.join(result.split())
 
 
 def _has_genre_theme(text: str) -> bool:
@@ -354,9 +393,11 @@ def call_movie_api(tool: str, argument: str) -> Optional[dict]:
     """Chama o endpoint apropriado da Movie API."""
     try:
         if tool == "search":
+            query = _translate_search_query(argument)
+            print(f"🔤 Search query (traduzida): {query[:80]}")
             r = requests.post(
                 f"{MOVIE_API}/search",
-                json={"query": argument, "top_k": 8},
+                json={"query": query, "top_k": 8},
                 timeout=60,
             )
         elif tool == "by_actor":
@@ -555,19 +596,76 @@ def call_llama(messages: list[dict]) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
+def _stream_llama(messages: list[dict]):
+    """Generator de tokens — streaming real da Llama token a token."""
+    payload = {
+        "model": LLM_MODEL,
+        "messages": messages,
+        "stream": True,
+        "temperature": 0.7,
+        "max_tokens": 300,
+    }
+    try:
+        with requests.post(LLAMA_CHAT_URL, json=payload, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            for raw in r.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(data)
+                    content = chunk["choices"][0]["delta"].get("content", "")
+                    if content:
+                        yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    pass
+    except Exception as e:
+        print(f"⚠️  Streaming error: {e}")
+
+
+def get_tmdb_data_cached(title: str, year) -> Optional[dict]:
+    key = f"{title}:{year}"
+    if key in _tmdb_cache:
+        ts, val = _tmdb_cache[key]
+        if time.time() - ts < _TMDB_TTL:
+            return val
+    val = get_tmdb_data(title, year)
+    _tmdb_cache[key] = (time.time(), val)
+    return val
+
+
+def call_movie_api_cached(tool: str, argument: str) -> Optional[dict]:
+    key = f"{tool}:{argument}"
+    if key in _api_cache:
+        ts, val = _api_cache[key]
+        if time.time() - ts < _API_TTL:
+            print(f"💾 Cache hit: {tool}:{argument[:40]}")
+            return val
+    val = call_movie_api(tool, argument)
+    if val:
+        _api_cache[key] = (time.time(), val)
+    return val
+
+
 # ---------------------------------------------------------------------------
 # Endpoints OpenAI-compatible
 # ---------------------------------------------------------------------------
 
 @app.get("/movies/popular")
 def popular_movies():
-    """Filmes populares enriquecidos com posters TMDB."""
+    """Filmes populares enriquecidos com posters TMDB (cached)."""
     try:
         r = requests.get(f"{MOVIE_API}/movies/popular?limit=12", timeout=30)
         r.raise_for_status()
         results = r.json().get("results", [])
+
         def _enrich(movie):
-            tmdb = get_tmdb_data(movie.get("title"), movie.get("year"))
+            tmdb = get_tmdb_data_cached(movie.get("title"), movie.get("year"))
             return {
                 "title": movie.get("title"),
                 "year": movie.get("year"),
@@ -657,11 +755,11 @@ RESPOSTA:"""
     except Exception:
         response_text = "Não foi possível gerar a recomendação."
 
-    tmdb_movies = []
-    for movie in results[:5]:
-        data = get_tmdb_data(movie.get("title"), movie.get("year"))
-        if data:
-            tmdb_movies.append(data)
+    def _enrich_d(movie):
+        return get_tmdb_data_cached(movie.get("title"), movie.get("year"))
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        tmdb_movies = [d for d in ex.map(_enrich_d, results[:5]) if d]
 
     print(f"🎯 Discover: {len(results)} filmes filtrados, {len(tmdb_movies)} posters")
     return {"text": response_text, "movies": tmdb_movies}
@@ -712,32 +810,23 @@ def chat_completions(req: ChatCompletionRequest):
                 f"Podes ver todos na galeria ao lado."
             )
         else:
-            # Fallback: pesquisa semântica com o nome como tema
             print(f"⚠️  Franchise não encontrada — fallback para search: '{argument}'")
-            api_data = call_movie_api("search", f"{argument} film")
+            api_data = call_movie_api_cached("search", f"{argument} film")
             if api_data:
                 results = api_data.get("results", [])
                 if results:
                     context_movies = results[:5]
                     context = format_context(api_data, "search")
-                    print(f"📚 Fallback context: {len(context)} chars")
-                    final_messages = [{
-                        "role": "user",
-                        "content": build_final_prompt(last_user, context),
-                    }]
+                    final_messages = [{"role": "user", "content": build_final_prompt(last_user, context)}]
                 else:
-                    response_override = (
-                        f"Não encontrei nenhuma saga nem filmes relacionados com '{argument}' "
-                        f"no catálogo."
-                    )
+                    response_override = f"Não encontrei nenhuma saga nem filmes relacionados com '{argument}' no catálogo."
 
     elif tool == "more_like" and argument:
         print(f"🎬 More-like: buscando filmes parecidos com '{argument}'")
         api_data = find_movie_and_search_similar(argument)
         if api_data and api_data.get("results"):
             context_movies = api_data.get("results", [])[:5]
-            ref = api_data.get("reference", {})
-            ref_title = ref.get("title", argument)
+            ref_title = api_data.get("reference", {}).get("title", argument)
             context = format_context(api_data, "more_like")
             print(f"📚 Contexto recuperado ({len(context)} chars)")
             enriched_prompt = f"""És um assistente especializado em filmes. Respondes em português de Portugal.
@@ -761,55 +850,37 @@ RESPOSTA:"""
 
     elif tool == "filter_combined" and argument:
         print(f"🎯 Filter combined: {argument}")
-        api_data = call_movie_api(tool, argument)
+        api_data = call_movie_api_cached(tool, argument)
         if api_data:
             results = api_data.get("results", [])
             context_movies = results[:5]
-            print(f"🎬 Filmes encontrados: {api_data.get('count', 0)} (mostrando até 10)")
+            print(f"🎬 Filmes encontrados: {api_data.get('count', 0)}")
             if not results:
-                # Sem resultados — informar a Llama
-                final_messages = [{
-                    "role": "user",
-                    "content": (
-                        f"O utilizador perguntou: '{last_user}'. "
-                        f"Pesquisei no catálogo com os filtros pedidos mas não encontrei "
-                        f"filmes que correspondessem. Responde-lhe a explicar isso em "
-                        f"português de Portugal de forma natural, sem inventar filmes."
-                    ),
-                }]
+                final_messages = [{"role": "user", "content": (
+                    f"O utilizador perguntou: '{last_user}'. "
+                    f"Pesquisei no catálogo com os filtros pedidos mas não encontrei filmes. "
+                    f"Responde em português de Portugal de forma natural, sem inventar filmes."
+                )}]
             else:
-                # Construir contexto detalhado com TODOS os filmes encontrados (até 10)
                 lines = [f"FILMES ENCONTRADOS NO CATÁLOGO ({len(results)} filmes):\n"]
                 for i, m in enumerate(results, 1):
-                    line = (
-                        f"{i}. {m.get('title')} ({m.get('year')}) "
-                        f"— Realizador: {m.get('director')}"
-                    )
-                    if m.get("genres"):
-                        line += f" | Géneros: {m['genres']}"
-                    if m.get("cast"):
-                        line += f" | Cast: {m['cast']}"
-                    if m.get("vote_average"):
-                        line += f" | Rating: {m['vote_average']}"
+                    line = f"{i}. {m.get('title')} ({m.get('year')}) — Realizador: {m.get('director')}"
+                    if m.get("genres"):  line += f" | Géneros: {m['genres']}"
+                    if m.get("cast"):    line += f" | Cast: {m['cast']}"
+                    if m.get("vote_average"): line += f" | Rating: {m['vote_average']}"
                     lines.append(line)
                 context = "\n".join(lines)
                 print(f"📚 Contexto recuperado ({len(context)} chars)")
-
                 try:
                     filters_dict = json.loads(argument) if isinstance(argument, str) else argument
                 except json.JSONDecodeError:
                     filters_dict = {}
-
-                final_messages = [{
-                    "role": "user",
-                    "content": build_filter_prompt(last_user, context, filters_dict),
-                }]
+                final_messages = [{"role": "user", "content": build_filter_prompt(last_user, context, filters_dict)}]
 
     elif tool != "none" and argument:
-        api_data = call_movie_api(tool, argument)
-        # Fallback: by_actor sem resultados → tenta by_director (ex: "filmes do Nolan")
+        api_data = call_movie_api_cached(tool, argument)
         if tool == "by_actor" and (not api_data or not api_data.get("results")):
-            dir_data = call_movie_api("by_director", argument)
+            dir_data = call_movie_api_cached("by_director", argument)
             if dir_data and dir_data.get("results"):
                 api_data = dir_data
                 tool = "by_director"
@@ -819,42 +890,31 @@ RESPOSTA:"""
             if not results:
                 response_override = (
                     "Não encontrei nenhum filme no catálogo que corresponda ao que pediste. "
-                    "Tenta reformular a pesquisa — por exemplo, pesquisa pelo tema sem o ator, "
-                    "ou pelo ator sem o tema."
+                    "Tenta reformular a pesquisa — por exemplo, pesquisa pelo tema sem o ator."
                 )
             else:
                 context_movies = results[:5]
                 context = format_context(api_data, tool)
                 print(f"📚 Contexto recuperado ({len(context)} chars)")
-                final_messages = [{
-                    "role": "user",
-                    "content": build_final_prompt(last_user, context),
-                }]
+                final_messages = [{"role": "user", "content": build_final_prompt(last_user, context)}]
 
-    # 3. Chamar a Llama (ou usar resposta directa se não há resultados)
-    if response_override:
-        response_text = response_override
-        print(f"⚠️  Sem resultados — resposta directa (sem chamar Llama)")
-    else:
-        response_text = call_llama(final_messages)
-        print(f"✅ Resposta gerada ({len(response_text)} chars)")
+    # 3. Preparar TMDB em paralelo (cached) — acontece antes do streaming para que os posters
+    #    estejam prontos logo que a Llama termine de gerar
+    def _fetch_one(movie):
+        data = get_tmdb_data_cached(movie.get("title"), movie.get("year"))
+        if data:
+            data["director"] = movie.get("director")
+            data["genres"]   = movie.get("genres")
+            return data
+        return None
 
-    # 4. Enriquecer com dados TMDB (ou usar franchise directamente)
     if direct_tmdb_movies is not None:
         tmdb_movies = direct_tmdb_movies
     else:
-        def _fetch_tmdb(movie):
-            data = get_tmdb_data(movie.get("title"), movie.get("year"))
-            if data:
-                data["director"] = movie.get("director")
-                data["genres"]   = movie.get("genres")
-                return data
-            return None
-
         with ThreadPoolExecutor(max_workers=5) as ex:
-            tmdb_movies = [r for r in ex.map(_fetch_tmdb, context_movies) if r is not None]
+            tmdb_movies = [r for r in ex.map(_fetch_one, context_movies) if r is not None]
     if tmdb_movies:
-        print(f"🎬 TMDB: {len(tmdb_movies)} posters encontrados")
+        print(f"🎬 TMDB: {len(tmdb_movies)} posters prontos")
 
     retrieved = [
         {"title": m.get("title"), "year": m.get("year"),
@@ -865,52 +925,46 @@ RESPOSTA:"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
-    # 4a. Modo streaming
+    # 4a. Modo streaming — tokens chegam ao browser em tempo real
     if req.stream:
+        _tmdb  = tmdb_movies
+        _retr  = retrieved
+        _final = final_messages
+        _ovr   = response_override
+
         def event_stream():
-            first = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": "movie-bot",
-                "choices": [{
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": ""},
-                    "finish_reason": None,
-                }],
-            }
-            yield f"data: {json.dumps(first)}\n\n"
+            cid = completion_id
+            ts  = created
 
-            content_chunk = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": "movie-bot",
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": response_text},
-                    "finish_reason": None,
-                }],
-            }
-            yield f"data: {json.dumps(content_chunk)}\n\n"
+            def _chunk(content):
+                return f"data: {json.dumps({'id':cid,'object':'chat.completion.chunk','created':ts,'model':'movie-bot','choices':[{'index':0,'delta':{'content':content},'finish_reason':None}]})}\n\n"
 
-            final = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": "movie-bot",
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }],
-            }
-            yield f"data: {json.dumps(final)}\n\n"
+            # Primeiro chunk: anuncia role
+            yield f"data: {json.dumps({'id':cid,'object':'chat.completion.chunk','created':ts,'model':'movie-bot','choices':[{'index':0,'delta':{'role':'assistant','content':''},'finish_reason':None}]})}\n\n"
+
+            if _ovr:
+                yield _chunk(_ovr)
+            else:
+                for token in _stream_llama(_final):
+                    yield _chunk(token)
+
+            # Chunk final (finish_reason)
+            yield f"data: {json.dumps({'id':cid,'object':'chat.completion.chunk','created':ts,'model':'movie-bot','choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})}\n\n"
+
+            # Evento especial com filmes + retrieved (o frontend detecta por "type")
+            yield f"data: {json.dumps({'type':'movies','movies':_tmdb,'retrieved':_retr})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    # 4b. Modo normal
+    # 4b. Modo normal (não-streaming)
+    if response_override:
+        response_text = response_override
+        print("⚠️  Resposta directa (sem Llama)")
+    else:
+        response_text = call_llama(final_messages)
+        print(f"✅ Resposta gerada ({len(response_text)} chars)")
+
     return {
         "id": completion_id,
         "object": "chat.completion",

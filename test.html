@@ -94,6 +94,30 @@
     background: var(--surface2); color: var(--muted);
     font-style: italic; font-size: 0.78rem;
     border-radius: 14px; padding: 8px 13px; border: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .typing-dots { display: flex; gap: 4px; }
+  .typing-dots span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); opacity: 0.4;
+    animation: dot-bounce 1.2s ease-in-out infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: .2s; }
+  .typing-dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes dot-bounce {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40%            { opacity: 1;   transform: scale(1.15); }
+  }
+  .streaming::after {
+    content: '▋';
+    display: inline;
+    animation: blink .6s step-end infinite;
+    color: var(--accent);
+    margin-left: 1px;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
   }
   #form {
     display: flex; padding: 12px; gap: 8px; flex-shrink: 0;
@@ -672,36 +696,83 @@ document.getElementById("form").addEventListener("submit", async e => {
   addMsg(text, "user");
   history.push({ role: "user", content: text });
 
-  const typing = addMsg("A pensar...", "typing");
+  // Indicador animado de "a pensar"
+  const typing = document.createElement("div");
+  typing.className = "msg typing";
+  typing.innerHTML = 'A pensar <div class="typing-dots"><span></span><span></span><span></span></div>';
+  document.getElementById("chat").appendChild(typing);
+  typing.scrollIntoView({ behavior: "smooth" });
   showSkeletons(6);
 
   try {
-    const res  = await fetch(`${WRAPPER}/v1/chat/completions`, {
+    const res = await fetch(`${WRAPPER}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "movie-bot", messages: history, stream: false })
+      body: JSON.stringify({ model: "movie-bot", messages: history, stream: true })
     });
-    const data = await res.json();
-    const reply = data.choices[0].message.content;
-    history.push({ role: "assistant", content: reply });
-    typing.remove();
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const botDiv = addMsg('', 'bot');
-    await typeMessage(botDiv, reply);
+    const botDiv = document.createElement("div");
+    botDiv.className = "msg bot streaming";
+    let fullText = "";
+    let started  = false;
 
-    showRag(data.retrieved);
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    if (data.movies && data.movies.length > 0) {
-      document.getElementById("section-title").textContent = "Recomendações";
-      document.getElementById("section-badge").textContent = `${data.movies.length} filmes`;
-      renderMovies(data.movies);
-    } else {
-      document.getElementById("section-title").textContent = "Sem Resultados";
-      document.getElementById("section-badge").textContent = "0 filmes";
-      document.getElementById("movies-grid").className = "movies-grid";
-      document.getElementById("movies-grid").innerHTML =
-        '<p style="color:var(--muted);font-size:.85rem;padding:8px 0">Não foram encontrados filmes para esta pesquisa.</p>';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (!raw || raw === "[DONE]") continue;
+
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { continue; }
+
+        // Evento especial de filmes enviado pelo backend após o [DONE] da Llama
+        if (parsed.type === "movies") {
+          if (parsed.movies?.length > 0) {
+            document.getElementById("section-title").textContent = "Recomendações";
+            document.getElementById("section-badge").textContent = `${parsed.movies.length} filmes`;
+            renderMovies(parsed.movies);
+          } else {
+            document.getElementById("section-title").textContent = "Sem Resultados";
+            document.getElementById("section-badge").textContent = "0 filmes";
+            document.getElementById("movies-grid").className = "movies-grid";
+            document.getElementById("movies-grid").innerHTML =
+              '<p style="color:var(--muted);font-size:.85rem;padding:8px 0">Não foram encontrados filmes para esta pesquisa.</p>';
+          }
+          if (parsed.retrieved) showRag(parsed.retrieved);
+          continue;
+        }
+
+        // Token de texto da Llama
+        const content = parsed.choices?.[0]?.delta?.content;
+        if (content) {
+          if (!started) {
+            typing.remove();
+            started = true;
+            document.getElementById("chat").appendChild(botDiv);
+          }
+          fullText += content;
+          botDiv.textContent = fullText;
+          botDiv.scrollIntoView({ behavior: "nearest" });
+        }
+      }
     }
+
+    // Remove cursor de streaming
+    botDiv.classList.remove("streaming");
+    if (!started) typing.remove();
+    history.push({ role: "assistant", content: fullText });
+
   } catch (err) {
     typing.remove();
     addMsg("Erro: " + err.message, "bot");
